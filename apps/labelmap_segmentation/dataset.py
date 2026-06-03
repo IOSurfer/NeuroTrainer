@@ -1,30 +1,39 @@
 """
-Dataset utilities. All parameters are read from the ConfigManager singleton.
+Dataset utilities for the LabelMap Segmentation application.
 
 Expected directory layout:
     <data_root>/
     ├── train/
     │   ├── subject_001/
-    │   │   ├── T1/   └── *.nii.gz   ← ScalarImage
-    │   │   ├── T2/   └── *.nii.gz
-    │   │   └── label/└── *.nii.gz   ← LabelMap
+    │   │   ├── T1/   *.nii.gz   →  tio.ScalarImage
+    │   │   ├── T2/   *.nii.gz   →  tio.ScalarImage
+    │   │   └── label/ *.nii.gz  →  tio.LabelMap
     │   └── subject_002/ ...
     ├── validation/
     └── test/
 """
+from __future__ import annotations
+
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import torchio as tio
 from torch.utils.data import DataLoader
 
-from config import ConfigManager, DataConfig, PatchConfig, AugmentConfig
+from config.manager import ConfigManager
+from apps.labelmap_segmentation.config import (
+    AugmentConfig,
+    DataConfig,
+    InfraConfig,
+    PatchConfig,
+    TrainingConfig,
+)
 
 
-# ── Low-level helpers ──────────────────────────────────────────────────────────
+# ── File helpers ───────────────────────────────────────────────────────────────
 
 def _find_nifti(folder: Path) -> Optional[Path]:
-    """Return the first NIfTI file in *folder* (.nii.gz preferred)."""
+    """Return the first NIfTI file in *folder* (.nii.gz preferred over .nii)."""
     for pattern in ('*.nii.gz', '*.nii'):
         hits = sorted(folder.glob(pattern))
         if hits:
@@ -33,7 +42,10 @@ def _find_nifti(folder: Path) -> Optional[Path]:
 
 
 def discover_modalities(split_dir: Path, label_name: str) -> List[str]:
-    """Scan the first valid subject directory and return modality folder names."""
+    """
+    Scan the first valid subject in *split_dir* and return modality names.
+    A folder qualifies if it is not *label_name* and contains at least one NIfTI file.
+    """
     for subj_dir in sorted(split_dir.iterdir()):
         if not subj_dir.is_dir():
             continue
@@ -49,13 +61,23 @@ def discover_modalities(split_dir: Path, label_name: str) -> List[str]:
 
 # ── Subject building ───────────────────────────────────────────────────────────
 
-def build_subjects(
+def build_labelmap_segmentation_subjects(
     split_dir: Path,
     modalities: List[str],
     label_name: str,
     require_label: bool = True,
 ) -> List[tio.Subject]:
-    """Create :class:`tio.Subject` instances from a split directory."""
+    """
+    Load all valid subjects for label-map segmentation.
+
+    Subjects missing a modality folder, a NIfTI file, or (when
+    *require_label* is ``True``) a label folder are silently skipped.
+
+    Returns a list of :class:`tio.Subject` where:
+    - Each modality → :class:`tio.ScalarImage`
+    - Label mask   → :class:`tio.LabelMap`
+    - ``subject_id`` attribute set to the folder name
+    """
     split_dir = Path(split_dir)
     subjects: List[tio.Subject] = []
 
@@ -73,7 +95,8 @@ def build_subjects(
         for mod in modalities:
             mod_dir = subj_dir / mod
             if not mod_dir.exists():
-                print(f'[dataset] Missing modality {mod!r} for {subj_dir.name} — skipped')
+                print(
+                    f'[dataset] Missing modality {mod!r} for {subj_dir.name} — skipped')
                 skip = True
                 break
             nii = _find_nifti(mod_dir)
@@ -92,7 +115,8 @@ def build_subjects(
             if nii:
                 kwargs[label_name] = tio.LabelMap(str(nii))
         elif require_label:
-            print(f'[dataset] Missing label folder for {subj_dir.name} — skipped')
+            print(
+                f'[dataset] Missing label folder for {subj_dir.name} — skipped')
             continue
 
         subjects.append(tio.Subject(**kwargs))
@@ -104,7 +128,10 @@ def build_subjects(
 # ── Transforms ────────────────────────────────────────────────────────────────
 
 def get_preprocessing_transform() -> tio.Compose:
-    """Build preprocessing pipeline from ConfigManager."""
+    """
+    Build the preprocessing pipeline from ``DataConfig``.
+    Order: Resample → CropOrPad → intensity normalisation.
+    """
     dcfg: DataConfig = ConfigManager.get().get_config(ConfigManager.DATA)
     transforms = []
     if dcfg.target_spacing is not None:
@@ -112,14 +139,15 @@ def get_preprocessing_transform() -> tio.Compose:
     if dcfg.target_shape is not None:
         transforms.append(tio.CropOrPad(dcfg.target_shape))
     if dcfg.normalization == 'znorm':
-        transforms.append(tio.ZNormalization(masking_method=tio.ZNormalization.mean))
+        transforms.append(tio.ZNormalization(
+            masking_method=tio.ZNormalization.mean))
     elif dcfg.normalization == 'rescale':
         transforms.append(tio.RescaleIntensity(out_min_max=(0.0, 1.0)))
     return tio.Compose(transforms)
 
 
 def get_augmentation_transform() -> tio.Compose:
-    """Build augmentation pipeline from ConfigManager."""
+    """Build the spatial and intensity augmentation pipeline from ``AugmentConfig``."""
     acfg: AugmentConfig = ConfigManager.get().get_config(ConfigManager.AUGMENT)
     transforms = [
         tio.RandomFlip(axes=(0, 1, 2), flip_probability=0.5),
@@ -135,24 +163,25 @@ def get_augmentation_transform() -> tio.Compose:
 
 # ── Dataset / DataLoader factory ───────────────────────────────────────────────
 
-def create_datasets() -> Tuple[
+def create_labelmap_segmentation_datasets() -> Tuple[
     tio.SubjectsDataset, tio.SubjectsDataset, tio.SubjectsDataset
 ]:
     """
-    Build train / validation / test datasets from the ConfigManager.
+    Build ``(train_dataset, val_dataset, test_dataset)`` from the ConfigManager.
 
-    When ``DataConfig.modalities`` is ``None`` the modality names are
-    auto-detected from the first subject, and the DataConfig is updated
-    in-place so all subsequent code sees the resolved list.
+    When ``DataConfig.modalities`` is ``None`` the names are auto-detected from
+    the first subject and written back into the ConfigManager so that the
+    Trainer and model builder see the resolved list.
     """
-    m     = ConfigManager.get()
-    dcfg: DataConfig   = m.get_config(ConfigManager.DATA)
+    m = ConfigManager.get()
+    dcfg: DataConfig = m.get_config(ConfigManager.DATA)
     acfg: AugmentConfig = m.get_config(ConfigManager.AUGMENT)
 
     data_root = Path(dcfg.data_root)
 
     if dcfg.modalities is None:
-        dcfg.modalities = discover_modalities(data_root / 'train', dcfg.label_name)
+        dcfg.modalities = discover_modalities(
+            data_root / 'train', dcfg.label_name)
         if not dcfg.modalities:
             raise RuntimeError(
                 f'Could not discover modalities under {data_root / "train"}. '
@@ -163,19 +192,27 @@ def create_datasets() -> Tuple[
     modalities = dcfg.modalities
     label_name = dcfg.label_name
 
-    preprocess      = get_preprocessing_transform()
-    augment         = get_augmentation_transform()
-    train_transform = tio.Compose([preprocess, augment]) if acfg.enabled else preprocess
-
-    train_subjects = build_subjects(data_root / 'train',      modalities, label_name)
-    val_subjects   = build_subjects(data_root / 'validation', modalities, label_name)
-    test_subjects  = build_subjects(data_root / 'test',       modalities, label_name,
-                                    require_label=True)
+    preprocess = get_preprocessing_transform()
+    augment = get_augmentation_transform()
+    train_tf = tio.Compose([preprocess, augment]
+                           ) if acfg.enabled else preprocess
 
     return (
-        tio.SubjectsDataset(train_subjects, transform=train_transform),
-        tio.SubjectsDataset(val_subjects,   transform=preprocess),
-        tio.SubjectsDataset(test_subjects,  transform=preprocess),
+        tio.SubjectsDataset(
+            build_labelmap_segmentation_subjects(
+                data_root / 'train', modalities, label_name),
+            transform=train_tf,
+        ),
+        tio.SubjectsDataset(
+            build_labelmap_segmentation_subjects(
+                data_root / 'validation', modalities, label_name),
+            transform=preprocess,
+        ),
+        tio.SubjectsDataset(
+            build_labelmap_segmentation_subjects(data_root / 'test', modalities, label_name,
+                                                 require_label=True),
+            transform=preprocess,
+        ),
     )
 
 
@@ -184,16 +221,15 @@ def create_data_loaders(
     val_dataset:   tio.SubjectsDataset,
 ) -> Tuple[DataLoader, DataLoader]:
     """
-    Return ``(train_loader, val_loader)`` configured from the ConfigManager.
+    Return ``(train_loader, val_loader)``.
 
-    Patch mode uses :class:`tio.Queue`; otherwise plain DataLoaders are used.
+    Patch mode (``PatchConfig.enabled``) wraps datasets in :class:`tio.Queue`.
     """
-    m     = ConfigManager.get()
-    pcfg: PatchConfig  = m.get_config(ConfigManager.PATCH)
-    dcfg: DataConfig   = m.get_config(ConfigManager.DATA)
-    from config import TrainingConfig, InfraConfig
+    m = ConfigManager.get()
+    pcfg: PatchConfig = m.get_config(ConfigManager.PATCH)
+    dcfg: DataConfig = m.get_config(ConfigManager.DATA)
     tcfg: TrainingConfig = m.get_config(ConfigManager.TRAINING)
-    icfg: InfraConfig    = m.get_config(ConfigManager.INFRA)
+    icfg: InfraConfig = m.get_config(ConfigManager.INFRA)
 
     if pcfg.enabled:
         patch_size = pcfg.size
@@ -202,7 +238,7 @@ def create_data_loaders(
             if pcfg.weighted_sampling
             else tio.data.UniformSampler(patch_size)
         )
-        train_queue = tio.Queue(
+        train_q = tio.Queue(
             subjects_dataset=train_dataset,
             max_length=pcfg.queue_max_length,
             samples_per_volume=pcfg.samples_per_volume,
@@ -211,7 +247,7 @@ def create_data_loaders(
             shuffle_subjects=True,
             shuffle_patches=True,
         )
-        val_queue = tio.Queue(
+        val_q = tio.Queue(
             subjects_dataset=val_dataset,
             max_length=pcfg.queue_max_length,
             samples_per_volume=pcfg.samples_per_volume,
@@ -220,21 +256,16 @@ def create_data_loaders(
             shuffle_subjects=False,
             shuffle_patches=False,
         )
-        # num_workers must be 0 on the DataLoader side when using a Queue
         return (
-            DataLoader(train_queue, batch_size=tcfg.batch_size, num_workers=0),
-            DataLoader(val_queue,   batch_size=tcfg.batch_size, num_workers=0),
+            DataLoader(train_q, batch_size=tcfg.batch_size, num_workers=0),
+            DataLoader(val_q,   batch_size=tcfg.batch_size, num_workers=0),
         )
 
     return (
         DataLoader(train_dataset,
-                   batch_size=tcfg.batch_size,
-                   shuffle=True,
-                   num_workers=icfg.num_workers,
-                   pin_memory=True),
+                   batch_size=tcfg.batch_size, shuffle=True,
+                   num_workers=icfg.num_workers, pin_memory=True),
         DataLoader(val_dataset,
-                   batch_size=tcfg.batch_size,
-                   shuffle=False,
-                   num_workers=icfg.num_workers,
-                   pin_memory=True),
+                   batch_size=tcfg.batch_size, shuffle=False,
+                   num_workers=icfg.num_workers, pin_memory=True),
     )

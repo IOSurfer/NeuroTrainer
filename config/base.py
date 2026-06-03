@@ -42,8 +42,8 @@ class ConfigField:
 
     def __init__(self, default: Any = None, *, doc: str = '') -> None:
         self.default = default
-        self.doc     = doc
-        self.name    = ''        # populated by __set_name__
+        self.doc = doc
+        self.name = ''        # populated by __set_name__
 
     def __set_name__(self, owner: type, name: str) -> None:
         self.name = name
@@ -83,11 +83,12 @@ class AbstractConfig:
     config_type: str = ''
 
     def __init__(self, file_path: str = '') -> None:
-        self._file_path: Optional[Path] = Path(file_path) if file_path else None
-        self._group     = 'default'
+        self._file_path: Optional[Path] = Path(
+            file_path) if file_path else None
+        self._group = 'default'
         self._props: Dict[str, Dict[str, Any]] = {'default': {}}
-        self._lock      = threading.Lock()
-        self._batch     = False
+        self._lock = threading.Lock()
+        self._batch = False
         self._cbs: List[Callable[[str, str, Any], None]] = []
 
         # Seed defaults from every ConfigField in the MRO
@@ -136,7 +137,8 @@ class AbstractConfig:
         """Read by dot-path, e.g. ``'optimizer.lr'``."""
         with self._lock:
             parts = path.split('.')
-            node: Any = self._props.get(self._group, {}).get(parts[0], _MISSING)
+            node: Any = self._props.get(
+                self._group, {}).get(parts[0], _MISSING)
             if node is _MISSING:
                 return default
             for part in parts[1:]:
@@ -150,8 +152,8 @@ class AbstractConfig:
     def set_value(self, path: str, value: Any) -> None:
         """Write by dot-path, e.g. ``'optimizer.lr'``."""
         with self._lock:
-            parts  = path.split('.')
-            group  = self._props.setdefault(self._group, {})
+            parts = path.split('.')
+            group = self._props.setdefault(self._group, {})
             if len(parts) == 1:
                 group[parts[0]] = value
             else:

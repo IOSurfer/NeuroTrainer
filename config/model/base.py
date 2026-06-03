@@ -21,7 +21,8 @@ class ModelConfig(AbstractConfig):
 
     config_type = 'Model'
 
-    architecture = ConfigField('', doc='Registry key that identifies this architecture')
+    architecture = ConfigField(
+        '', doc='Registry key that identifies this architecture')
 
 
 class EncoderConfig(AbstractConfig):
@@ -29,9 +30,11 @@ class EncoderConfig(AbstractConfig):
 
     config_type = 'Encoder'
 
-    in_channels   = ConfigField(1,  doc='Input channels (= number of modalities)')
-    base_features = ConfigField(32, doc='Feature channels at the first encoding level')
-    depth         = ConfigField(4,  doc='Number of encoding / downsampling levels')
+    in_channels = ConfigField(
+        1,  doc='Input channels (= number of modalities)')
+    base_features = ConfigField(
+        32, doc='Feature channels at the first encoding level')
+    depth = ConfigField(4,  doc='Number of encoding / downsampling levels')
 
 
 class DecoderConfig(AbstractConfig):
@@ -39,8 +42,10 @@ class DecoderConfig(AbstractConfig):
 
     config_type = 'Decoder'
 
-    base_features = ConfigField(32,   doc='Feature channels at the first decoding level')
-    trilinear     = ConfigField(True, doc='Use trilinear upsampling; False = transposed conv')
+    base_features = ConfigField(
+        32,   doc='Feature channels at the first decoding level')
+    trilinear = ConfigField(
+        True, doc='Use trilinear upsampling; False = transposed conv')
 
 
 class EncoderDecoderModelConfig(ModelConfig):

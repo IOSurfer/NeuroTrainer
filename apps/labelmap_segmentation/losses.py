@@ -14,8 +14,8 @@ class DiceLoss(nn.Module):
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
-        logits:  [B, C, D, H, W] — raw (un-activated) model output
-        targets: [B, 1, D, H, W] — integer class indices
+        logits:  [B, C, D, H, W] raw model output
+        targets: [B, 1, D, H, W] integer class indices
         """
         if self.num_classes == 1:
             probs = torch.sigmoid(logits)
@@ -23,18 +23,18 @@ class DiceLoss(nn.Module):
             inter = (probs * t).sum()
             return 1.0 - (2.0 * inter + self.smooth) / (probs.sum() + t.sum() + self.smooth)
 
-        probs = F.softmax(logits, dim=1)  # [B, C, D, H, W]
-        t_long = targets.squeeze(1).long()  # [B, D, H, W]
-        t_oh = F.one_hot(t_long, self.num_classes).permute(0, 4, 1, 2, 3).float()
+        probs = F.softmax(logits, dim=1)
+        t_long = targets.squeeze(1).long()
+        t_oh = F.one_hot(t_long, self.num_classes).permute(
+            0, 4, 1, 2, 3).float()
 
         start = 1 if self.ignore_background else 0
         dice_losses = []
         for c in range(start, self.num_classes):
-            p_c = probs[:, c]
-            t_c = t_oh[:, c]
+            p_c, t_c = probs[:, c], t_oh[:, c]
             inter = (p_c * t_c).sum()
-            dice_c = (2.0 * inter + self.smooth) / (p_c.sum() + t_c.sum() + self.smooth)
-            dice_losses.append(1.0 - dice_c)
+            dice_losses.append(1.0 - (2.0 * inter + self.smooth) /
+                               (p_c.sum() + t_c.sum() + self.smooth))
 
         return torch.stack(dice_losses).mean()
 
@@ -55,16 +55,11 @@ class DiceCELoss(nn.Module):
         self.dice_weight = dice_weight
         self.ce_weight = ce_weight
         self.num_classes = num_classes
-
-        if num_classes == 1:
-            self.ce = nn.BCEWithLogitsLoss()
-        else:
-            self.ce = nn.CrossEntropyLoss()
+        self.ce = nn.BCEWithLogitsLoss() if num_classes == 1 else nn.CrossEntropyLoss()
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         loss_dice = self.dice(logits, targets)
-        if self.num_classes == 1:
-            loss_ce = self.ce(logits, targets.float())
-        else:
-            loss_ce = self.ce(logits, targets.squeeze(1).long())
+        loss_ce = (self.ce(logits, targets.float())
+                   if self.num_classes == 1
+                   else self.ce(logits, targets.squeeze(1).long()))
         return self.dice_weight * loss_dice + self.ce_weight * loss_ce
