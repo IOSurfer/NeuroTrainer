@@ -147,17 +147,45 @@ def get_preprocessing_transform() -> tio.Compose:
 
 
 def get_augmentation_transform() -> tio.Compose:
-    """Build the spatial and intensity augmentation pipeline from ``AugmentConfig``."""
-    acfg: AugmentConfig = ConfigManager.get().get_config(ConfigManager.AUGMENT)
-    transforms = [
-        tio.RandomFlip(axes=(0, 1, 2), flip_probability=0.5),
-        tio.RandomAffine(scales=(0.9, 1.1), degrees=15, translation=10, p=0.5),
-        tio.RandomNoise(std=(0.0, 0.1), p=0.3),
-        tio.RandomBlur(std=(0.0, 1.0), p=0.3),
-        tio.RandomGamma(log_gamma=(-0.3, 0.3), p=0.3),
-    ]
-    if acfg.elastic_deformation:
-        transforms.insert(2, tio.RandomElasticDeformation(p=0.3))
+    """
+    Build the augmentation pipeline from ``AugmentConfig``.
+
+    Each transform is included only when its individual toggle is ``True``.
+    When the global ``enabled`` flag is ``False`` the result is an empty
+    :class:`tio.Compose` (all transforms skipped).
+
+    Transform order: spatial (Flip → Affine → Elastic) then
+    intensity (Noise → Blur → Gamma).
+    """
+    a: AugmentConfig = ConfigManager.get().get_config(ConfigManager.AUGMENT)
+    transforms = []
+
+    if a.flip:
+        transforms.append(tio.RandomFlip(
+            axes=a.flip_axes,
+            flip_probability=a.flip_p,
+        ))
+
+    if a.affine:
+        transforms.append(tio.RandomAffine(
+            scales=a.affine_scales,
+            degrees=a.affine_degrees,
+            translation=a.affine_translation,
+            p=a.affine_p,
+        ))
+
+    if a.elastic:
+        transforms.append(tio.RandomElasticDeformation(p=a.elastic_p))
+
+    if a.noise:
+        transforms.append(tio.RandomNoise(std=a.noise_std, p=a.noise_p))
+
+    if a.blur:
+        transforms.append(tio.RandomBlur(std=a.blur_std, p=a.blur_p))
+
+    if a.gamma:
+        transforms.append(tio.RandomGamma(log_gamma=a.gamma_log_gamma, p=a.gamma_p))
+
     return tio.Compose(transforms)
 
 

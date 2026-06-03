@@ -88,8 +88,15 @@ def parse_args() -> argparse.Namespace:
     g.add_argument('--weighted_sampling',  action='store_true')
 
     g = p.add_argument_group('Augmentation')
-    g.add_argument('--no_augment',          action='store_true')
-    g.add_argument('--elastic_deformation', action='store_true')
+    g.add_argument('--no_augment',     action='store_true',
+                   help='Disable all augmentation (overrides individual toggles)')
+    g.add_argument('--no_flip',        action='store_true', help='Disable random flip')
+    g.add_argument('--no_affine',      action='store_true', help='Disable random affine')
+    g.add_argument('--no_noise',       action='store_true', help='Disable random noise')
+    g.add_argument('--no_blur',        action='store_true', help='Disable random blur')
+    g.add_argument('--no_gamma',       action='store_true', help='Disable random gamma')
+    g.add_argument('--elastic',        action='store_true',
+                   help='Enable random elastic deformation (disabled by default)')
 
     g = p.add_argument_group('Model')
     g.add_argument('--base_features', type=int, default=32)
@@ -164,7 +171,12 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
 
     ac = AugmentConfig()
     ac.enabled = not args.no_augment
-    ac.elastic_deformation = args.elastic_deformation
+    ac.flip    = not args.no_flip
+    ac.affine  = not args.no_affine
+    ac.noise   = not args.no_noise
+    ac.blur    = not args.no_blur
+    ac.gamma   = not args.no_gamma
+    ac.elastic = args.elastic
 
     mc = UNet3DConfig()
     mc.encoder.base_features = args.base_features
