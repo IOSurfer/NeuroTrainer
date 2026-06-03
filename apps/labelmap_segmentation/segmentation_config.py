@@ -66,38 +66,40 @@ class AugmentConfig(AbstractConfig):
     config_type = 'Augment'
 
     # Master switch — overrides all individual toggles when False
-    enabled = ConfigField(True, doc='Global switch; False disables all augmentation')
+    enabled = ConfigField(
+        True, doc='Global switch; False disables all augmentation')
 
     # ── Random Flip ───────────────────────────────────────────────────────────
-    flip      = ConfigField(True,      doc='Enable random axis flipping')
+    flip = ConfigField(False,      doc='Enable random axis flipping')
     flip_axes = ConfigField((0, 1, 2), doc='Axes to consider for flipping')
-    flip_p    = ConfigField(0.5,       doc='Per-axis flip probability')
+    flip_p = ConfigField(0.3,       doc='Per-axis flip probability')
 
     # ── Random Affine ─────────────────────────────────────────────────────────
-    affine             = ConfigField(True,       doc='Enable random affine transform')
-    affine_p           = ConfigField(0.5,        doc='Apply probability')
-    affine_scales      = ConfigField((0.9, 1.1), doc='Scale range (min, max)')
-    affine_degrees     = ConfigField(15,          doc='Max rotation in degrees')
+    affine = ConfigField(False,       doc='Enable random affine transform')
+    affine_p = ConfigField(0.3,        doc='Apply probability')
+    affine_scales = ConfigField((1.0, 1.0), doc='Scale range (min, max)')
+    affine_degrees = ConfigField(15,          doc='Max rotation in degrees')
     affine_translation = ConfigField(10,          doc='Max translation in mm')
 
     # ── Random Elastic Deformation ────────────────────────────────────────────
-    elastic   = ConfigField(False, doc='Enable random elastic deformation')
+    elastic = ConfigField(True, doc='Enable random elastic deformation')
     elastic_p = ConfigField(0.3,   doc='Apply probability')
 
     # ── Random Noise ──────────────────────────────────────────────────────────
-    noise     = ConfigField(True,       doc='Enable additive Gaussian noise')
-    noise_p   = ConfigField(0.3,        doc='Apply probability')
+    noise = ConfigField(True,       doc='Enable additive Gaussian noise')
+    noise_p = ConfigField(0.3,        doc='Apply probability')
     noise_std = ConfigField((0.0, 0.1), doc='Noise std range (min, max)')
 
     # ── Random Blur ───────────────────────────────────────────────────────────
-    blur      = ConfigField(True,       doc='Enable random Gaussian blur')
-    blur_p    = ConfigField(0.3,        doc='Apply probability')
-    blur_std  = ConfigField((0.0, 1.0), doc='Blur std range (min, max)')
+    blur = ConfigField(False,       doc='Enable random Gaussian blur')
+    blur_p = ConfigField(0.3,        doc='Apply probability')
+    blur_std = ConfigField((0.0, 1.0), doc='Blur std range (min, max)')
 
     # ── Random Gamma ──────────────────────────────────────────────────────────
-    gamma           = ConfigField(True,        doc='Enable random gamma correction')
-    gamma_p         = ConfigField(0.3,         doc='Apply probability')
-    gamma_log_gamma = ConfigField((-0.3, 0.3), doc='Log-gamma range (min, max)')
+    gamma = ConfigField(True,        doc='Enable random gamma correction')
+    gamma_p = ConfigField(0.3,         doc='Apply probability')
+    gamma_log_gamma = ConfigField(
+        (-0.3, 0.3), doc='Log-gamma range (min, max)')
 
 
 class UNet3DEncoderConfig(EncoderConfig):
