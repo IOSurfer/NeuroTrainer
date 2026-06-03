@@ -20,8 +20,8 @@ from typing import List, Optional, Tuple
 import torchio as tio
 from torch.utils.data import DataLoader
 
-from config.manager import ConfigManager
-from apps.labelmap_segmentation.config import (
+from configuration.manager import ConfigManager
+from apps.labelmap_segmentation.segmentation_config import (
     AugmentConfig,
     DataConfig,
     InfraConfig,

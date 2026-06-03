@@ -12,8 +12,8 @@ UNet3DConfig (EncoderDecoderModelConfig)
 └── decoder: UNet3DDecoderConfig   trilinear
 """
 
-from config.base import AbstractConfig, ConfigField
-from config.model.base import DecoderConfig, EncoderConfig, EncoderDecoderModelConfig
+from configuration.base import AbstractConfig, ConfigField
+from configuration.model.base import DecoderConfig, EncoderConfig, EncoderDecoderModelConfig
 
 
 class DataConfig(AbstractConfig):

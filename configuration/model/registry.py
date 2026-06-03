@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Type, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from config.model.base import ModelConfig
+    from configuration.model.base import ModelConfig
 
 _REGISTRY: Dict[str, Type['ModelConfig']] = {}
 
@@ -72,7 +72,7 @@ def load_model_config_from_file(path: str) -> 'ModelConfig':
     if architecture and architecture in _REGISTRY:
         cfg: 'ModelConfig' = _REGISTRY[architecture]()
     else:
-        from config.model.base import ModelConfig
+        from configuration.model.base import ModelConfig
         cfg = ModelConfig()
 
     cfg.from_dict(data)

@@ -4,9 +4,9 @@ config — base configuration infrastructure.
 Exports only the building blocks shared by all applications.
 Application-specific config classes live in apps/<app_name>/config.py.
 """
-from config.base import AbstractConfig, ConfigField
-from config.manager import ConfigManager
-from config.model.base import (
+from configuration.base import AbstractConfig, ConfigField
+from configuration.manager import ConfigManager
+from configuration.model.base import (
     ModelConfig,
     EncoderConfig,
     DecoderConfig,

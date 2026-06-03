@@ -1,6 +1,6 @@
 # Architecture-agnostic model config building blocks.
 # App-specific classes (UNet3DConfig, etc.) live in apps/<app>/config.py.
-from config.model.base import (
+from configuration.model.base import (
     ModelConfig,
     EncoderConfig,
     DecoderConfig,

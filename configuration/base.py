@@ -1,7 +1,6 @@
 """
 AbstractConfig and ConfigField — base building blocks for all configuration classes.
 
-Design mirrors qLarmorAbstractConfig:
   - _props[group][key] flat storage per group
   - Dot-path access for nested values (get_value / set_value)
   - JSON load / save
@@ -9,7 +8,6 @@ Design mirrors qLarmorAbstractConfig:
   - Batch mode         (begin_batch / end_batch)
   - Sub-config composition via sub_configs()
 
-ConfigField is the Python equivalent of larmorConfigSetMacro / larmorConfigGetMacro.
 Declare parameters as class-level descriptors:
 
     class MyConfig(AbstractConfig):
@@ -35,7 +33,6 @@ class ConfigField:
     """
     Descriptor for a typed configuration parameter.
 
-    Equivalent to the C++ larmorConfigSetMacro / larmorConfigGetMacro pair.
     Values are stored inside the owning :class:`AbstractConfig`'s backing
     store so that changes are automatically notified and persisted.
     """
@@ -65,7 +62,7 @@ class ConfigField:
 class AbstractConfig:
     """
     Base configuration with dict-backed storage, JSON I/O, and change
-    notification. Mirrors qLarmorAbstractConfig.
+    notification.
 
     Storage layout
     --------------

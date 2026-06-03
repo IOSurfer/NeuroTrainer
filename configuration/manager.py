@@ -1,6 +1,5 @@
 """
 ConfigManager — singleton registry of named AbstractConfig instances.
-Mirrors qLarmorConfigManager.
 
 This module is pure infrastructure: it knows nothing about specific config
 types (DataConfig, ModelConfig, etc.).  Those live in each application under
@@ -25,7 +24,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from config.base import AbstractConfig
+    from configuration.base import AbstractConfig
 
 
 class ConfigManager:

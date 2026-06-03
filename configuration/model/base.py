@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from config.base import AbstractConfig, ConfigField
+from configuration.base import AbstractConfig, ConfigField
 
 
 class ModelConfig(AbstractConfig):

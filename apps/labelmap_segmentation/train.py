@@ -33,8 +33,8 @@ import torchio as tio
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from config.manager import ConfigManager
-from apps.labelmap_segmentation.config import (
+from configuration.manager import ConfigManager
+from apps.labelmap_segmentation.segmentation_config import (
     AugmentConfig,
     DataConfig,
     InfraConfig,
