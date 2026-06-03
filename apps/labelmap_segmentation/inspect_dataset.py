@@ -428,6 +428,210 @@ def _first_nifti(folder: Path) -> Optional[Path]:
     return None
 
 
+# ── Config generation + loader test ───────────────────────────────────────────
+
+def generate_configs(inspector: DatasetInspector, reports: Dict[str, SplitReport]):
+    """
+    Build ``DataConfig`` and ``AugmentConfig`` from the inspection results.
+
+    Returns ``(DataConfig, AugmentConfig)``.
+
+    ``target_shape`` and ``target_spacing`` are left ``None`` — the function
+    prints a suggestion based on the training-split shape distribution, but
+    only the user can decide whether to crop/pad or resample.
+    """
+    from apps.labelmap_segmentation.segmentation_config import DataConfig, AugmentConfig
+
+    dc = DataConfig()
+    dc.data_root   = str(inspector.root)
+    dc.modalities  = inspector.modalities
+    dc.label_name  = inspector.label_name
+    dc.num_classes = inspector.num_classes
+
+    ac = AugmentConfig()   # all defaults
+
+    W    = 68
+    thin = '-' * W
+    print(f'\n+{"=" * W}+')
+    print(f'|{"  GENERATED CONFIGS":^{W}}|')
+    print(f'+{"=" * W}+')
+    print(f'\n  DataConfig')
+    print(f'  {thin}')
+    print(f'    data_root   = {dc.data_root!r}')
+    print(f'    modalities  = {dc.modalities}')
+    print(f'    label_name  = {dc.label_name!r}')
+    print(f'    num_classes = {dc.num_classes}')
+
+    # Suggest target_shape / target_spacing from training set
+    train = reports.get('train')
+    if train:
+        for mod in (inspector.modalities or []):
+            counter = train.shape_counts.get(mod, {})
+            if counter:
+                most_common_shape, cnt = counter.most_common(1)[0]
+                pct = cnt / train.n_valid * 100 if train.n_valid else 0
+                print(f'\n  Shape suggestion  ({mod})')
+                print(f'  {thin}')
+                print(f'    Most common : {most_common_shape}  ({pct:.0f}% of train subjects)')
+                if len(counter) > 1:
+                    print(f'    Other shapes: {list(counter.keys())[1:]}')
+                    print(f'    -> Consider setting target_shape={most_common_shape}')
+                else:
+                    print(f'    All subjects share the same shape; no CropOrPad needed.')
+
+            spacings = train.spacing_data.get(mod, [])
+            if spacings:
+                arr = np.array(spacings)
+                med = tuple(float(np.median(arr[:, i])) for i in range(arr.shape[1]))
+                std = arr.std(axis=0)
+                if std.max() > 1e-3:
+                    print(f'    Spacing varies (std {std}) — consider resampling '
+                          f'to target_spacing={med}')
+                else:
+                    print(f'    Spacing uniform: {med}; no Resample needed.')
+                break  # show for first modality only
+
+    print(f'\n  AugmentConfig  (all defaults; edit via JSON or CLI flags)')
+    print(f'  {thin}')
+    print(f'    flip={ac.flip}  affine={ac.affine}  noise={ac.noise}  '
+          f'blur={ac.blur}  gamma={ac.gamma}  elastic={ac.elastic}')
+    print()
+
+    return dc, ac
+
+
+def run_loader_test(
+    inspector: DatasetInspector,
+    data_cfg=None,
+    augment_cfg=None,
+    num_batches: int = 2,
+) -> None:
+    """
+    Populate ConfigManager, create datasets and DataLoaders,
+    then load *num_batches* training batches to verify the pipeline end-to-end.
+
+    Parameters
+    ----------
+    inspector    : DatasetInspector
+        The inspector that was already run (provides modalities / label_name).
+    data_cfg     : DataConfig, optional
+        Pre-built config; created from *inspector* when ``None``.
+    augment_cfg  : AugmentConfig, optional
+        Pre-built config; defaults when ``None``.
+    num_batches  : int
+        How many training batches to load.
+    """
+    try:
+        from configuration.manager import ConfigManager
+        from apps.labelmap_segmentation.segmentation_config import (
+            DataConfig, AugmentConfig, PatchConfig, TrainingConfig, InfraConfig,
+        )
+        from apps.labelmap_segmentation.dataset import (
+            create_labelmap_segmentation_datasets,
+            create_data_loaders,
+        )
+        import torchio as tio
+    except ImportError as exc:
+        print(f'\n[loader test] Import error — {exc}')
+        return
+
+    W    = 68
+    thin = '-' * W
+    print(f'\n+{"=" * W}+')
+    print(f'|{"  LOADER TEST":^{W}}|')
+    print(f'+{"=" * W}+')
+
+    # Build configs if not provided
+    if data_cfg is None:
+        dc = DataConfig()
+        dc.data_root   = str(inspector.root)
+        dc.modalities  = inspector.modalities
+        dc.label_name  = inspector.label_name
+        dc.num_classes = inspector.num_classes
+    else:
+        dc = data_cfg
+
+    ac = augment_cfg if augment_cfg is not None else AugmentConfig()
+    ac.enabled = False   # disable augmentation for the loader test
+
+    pc = PatchConfig()
+    pc.enabled = False
+
+    tc = TrainingConfig()
+    tc.batch_size = 1
+
+    ic = InfraConfig()
+    ic.num_workers = 0   # safe for testing on any platform
+
+    ConfigManager.reset()
+    m = ConfigManager.get()
+    m.register(ConfigManager.DATA,     dc)
+    m.register(ConfigManager.PATCH,    pc)
+    m.register(ConfigManager.AUGMENT,  ac)
+    m.register(ConfigManager.TRAINING, tc)
+    m.register(ConfigManager.INFRA,    ic)
+
+    # ── Dataset creation ─────────────────────────────────────────────────────
+    print('\n  Creating datasets ...')
+    try:
+        train_ds, val_ds, test_ds = create_labelmap_segmentation_datasets()
+    except Exception as exc:
+        print(f'  [FAIL] Dataset creation: {exc}')
+        return
+
+    print(f'  {thin}')
+    print(f'  {"split":<14}  {"subjects":>10}')
+    print(f'  {thin}')
+    for name, ds in [('train', train_ds), ('validation', val_ds), ('test', test_ds)]:
+        print(f'  {name:<14}  {len(ds):>10}')
+
+    # ── DataLoader creation ───────────────────────────────────────────────────
+    print('\n  Creating DataLoaders ...')
+    try:
+        train_loader, val_loader = create_data_loaders(train_ds, val_ds)
+    except Exception as exc:
+        print(f'  [FAIL] DataLoader creation: {exc}')
+        return
+    print(f'  train batch_size={train_loader.batch_size}  '
+          f'val batch_size={val_loader.batch_size}')
+
+    # ── Batch loading ─────────────────────────────────────────────────────────
+    print(f'\n  Loading {num_batches} train batch(es) ...')
+    print(f'  {thin}')
+    errors = []
+    try:
+        for i, batch in enumerate(train_loader):
+            if i >= num_batches:
+                break
+            print(f'\n  batch {i}')
+            for mod in inspector.modalities or []:
+                if mod not in batch:
+                    continue
+                t = batch[mod][tio.DATA]                  # [B, 1, D, H, W]
+                print(f'    {mod:<14}  shape={tuple(t.shape)}'
+                      f'  dtype={t.dtype}'
+                      f'  min={t.min().item():.3f}'
+                      f'  max={t.max().item():.3f}'
+                      f'  mean={t.mean().item():.3f}')
+            lbl_key = inspector.label_name
+            if lbl_key in batch:
+                lbl = batch[lbl_key][tio.DATA]            # [B, 1, D, H, W]
+                unique = sorted(lbl.unique().long().tolist())
+                print(f'    {lbl_key:<14}  shape={tuple(lbl.shape)}'
+                      f'  dtype={lbl.dtype}'
+                      f'  classes present={unique}')
+    except Exception as exc:
+        errors.append(str(exc))
+        print(f'  [FAIL] Batch loading: {exc}')
+
+    print(f'\n  {thin}')
+    if errors:
+        print('  Result: FAIL')
+    else:
+        print(f'  Result: OK  ({num_batches} batch(es) loaded successfully)')
+    print(f'+{"=" * W}+\n')
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 def _parse_args() -> argparse.Namespace:
@@ -447,7 +651,11 @@ def _parse_args() -> argparse.Namespace:
                    default=['train', 'validation', 'test'],
                    help='Splits to inspect')
     p.add_argument('--skip_intensity', action='store_true',
-                   help='Skip voxel-level statistics (structural check only — fast)')
+                   help='Skip voxel-level statistics (structural check only, fast)')
+    p.add_argument('--test_loader',  action='store_true',
+                   help='After inspection: generate configs and test the DataLoader pipeline')
+    p.add_argument('--test_batches', type=int, default=2,
+                   help='Number of training batches to load during --test_loader')
     p.add_argument('--output',       default=None,
                    help='Write the text report to this file in addition to stdout')
     return p.parse_args()
@@ -480,6 +688,15 @@ def main() -> None:
         sys.stdout = _orig  # type: ignore[assignment]
         Path(args.output).write_text(buf.getvalue(), encoding='utf-8')  # type: ignore[possibly-undefined]
         print(f'[inspect] Report written to {args.output}')
+
+    if args.test_loader:
+        data_cfg, augment_cfg = generate_configs(inspector, reports)
+        run_loader_test(
+            inspector,
+            data_cfg=data_cfg,
+            augment_cfg=augment_cfg,
+            num_batches=args.test_batches,
+        )
 
 
 class _Tee:
