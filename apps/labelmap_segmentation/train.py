@@ -597,7 +597,7 @@ class Trainer:
             torch.save(ckpt, self.ckpt_dir / f'epoch_{epoch:04d}.pth')
         if is_best:
             torch.save(ckpt, self.ckpt_dir / 'best.pth')
-            self.log.info(f'  ↳ New best — val_dice {val_m["mean_dice"]:.4f}')
+            self.log.info(f'  -> New best — val_dice {val_m["mean_dice"]:.4f}')
 
     def _load_checkpoint(self, path: str) -> None:
         self.log.info(f'Resuming from {path}')
