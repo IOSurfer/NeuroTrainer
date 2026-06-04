@@ -66,10 +66,10 @@ def parse_args() -> argparse.Namespace:
                         'All other flags are ignored when this is set.')
 
     g = p.add_argument_group('Data')
-    g.add_argument('--data_root',      required=True)
+    g.add_argument('--data_root')
     g.add_argument('--modalities',     nargs='+', default=None)
     g.add_argument('--label_name',     default='label')
-    g.add_argument('--num_classes',    type=int, required=True)
+    g.add_argument('--num_classes',    type=int)
     g.add_argument('--target_spacing', type=float, nargs=3,
                    default=None, metavar=('X', 'Y', 'Z'))
     g.add_argument('--target_shape',   type=int, nargs=3,
@@ -149,6 +149,10 @@ def parse_args() -> argparse.Namespace:
 
 def setup_manager(args: argparse.Namespace) -> ConfigManager:
     """Build and register all configs from parsed CLI arguments."""
+
+    if args.data_root is None or args.num_classes:
+        print("Error: the following arguments are required: --data_root, --num_classes")
+
     m = ConfigManager.get()
 
     dc = DataConfig()
