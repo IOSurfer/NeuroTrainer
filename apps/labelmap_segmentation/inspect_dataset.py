@@ -103,7 +103,7 @@ class DatasetInspector:
         Which splits to inspect.  Defaults to all three.
     skip_intensity : bool
         When ``True``, skip voxel-level intensity and label statistics
-        (much faster for large datasets — structural checks only).
+        (much faster for large datasets -- structural checks only).
     """
 
     def __init__(
@@ -141,7 +141,7 @@ class DatasetInspector:
         for split in self.splits:
             split_dir = self.root / split
             if not split_dir.exists():
-                print(f'[inspect] Split directory not found: {split_dir} — skipped')
+                print(f'[inspect] Split directory not found: {split_dir} -- skipped')
                 continue
             print(f'[inspect] Inspecting split: {split} …', end='  ', flush=True)
             reports[split] = self._inspect_split(split_dir, split)
@@ -436,7 +436,7 @@ def generate_configs(inspector: DatasetInspector, reports: Dict[str, SplitReport
 
     Returns ``(DataConfig, AugmentConfig)``.
 
-    ``target_shape`` and ``target_spacing`` are left ``None`` — the function
+    ``target_shape`` and ``target_spacing`` are left ``None`` -- the function
     prints a suggestion based on the training-split shape distribution, but
     only the user can decide whether to crop/pad or resample.
     """
@@ -485,7 +485,7 @@ def generate_configs(inspector: DatasetInspector, reports: Dict[str, SplitReport
                 med = tuple(float(np.median(arr[:, i])) for i in range(arr.shape[1]))
                 std = arr.std(axis=0)
                 if std.max() > 1e-3:
-                    print(f'    Spacing varies (std {std}) — consider resampling '
+                    print(f'    Spacing varies (std {std}) -- consider resampling '
                           f'to target_spacing={med}')
                 else:
                     print(f'    Spacing uniform: {med}; no Resample needed.')
@@ -532,7 +532,7 @@ def run_loader_test(
         )
         import torchio as tio
     except ImportError as exc:
-        print(f'\n[loader test] Import error — {exc}')
+        print(f'\n[loader test] Import error -- {exc}')
         return
 
     W    = 68
@@ -636,7 +636,7 @@ def run_loader_test(
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description='LabelMap Segmentation — dataset inspection',
+        description='LabelMap Segmentation -- dataset inspection',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument('--data_root',    required=True,

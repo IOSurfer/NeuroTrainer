@@ -1,5 +1,5 @@
 """
-LabelMap Segmentation — training entry point.
+LabelMap Segmentation -- training entry point.
 
 Usage
 -----
@@ -58,7 +58,7 @@ from apps.labelmap_segmentation.model import UNet3D
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description='LabelMap Segmentation — 3D U-Net trainer',
+        description='LabelMap Segmentation -- 3D U-Net trainer',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument('--reproduce', default=None, metavar='EXP_DIR',
@@ -304,7 +304,7 @@ class Trainer:
         self.train_loader, self.val_loader = create_data_loaders(
             self.train_ds, self.val_ds)
         self.log.info(
-            f'Subjects — train: {len(self.train_ds)}  '
+            f'Subjects -- train: {len(self.train_ds)}  '
             f'val: {len(self.val_ds)}  test: {len(self.test_ds)}'
         )
 
@@ -324,7 +324,7 @@ class Trainer:
 
         n_params = sum(p.numel()
                        for p in self.model.parameters() if p.requires_grad)
-        self.log.info(f'UNet3D — trainable parameters: {n_params:,}')
+        self.log.info(f'UNet3D -- trainable parameters: {n_params:,}')
 
         self.criterion = self._build_loss()
         self.optimizer = self._build_optimizer()
@@ -597,7 +597,7 @@ class Trainer:
             torch.save(ckpt, self.ckpt_dir / f'epoch_{epoch:04d}.pth')
         if is_best:
             torch.save(ckpt, self.ckpt_dir / 'best.pth')
-            self.log.info(f'  -> New best — val_dice {val_m["mean_dice"]:.4f}')
+            self.log.info(f'  -> New best -- val_dice {val_m["mean_dice"]:.4f}')
 
     def _load_checkpoint(self, path: str) -> None:
         self.log.info(f'Resuming from {path}')
@@ -658,7 +658,7 @@ class Trainer:
         mean_dice = float(np.mean(all_dice))
         std_dice = float(np.std(all_dice))
         mean_iou = float(np.mean(all_iou))
-        self.log.info(f'Test — mean Dice: {mean_dice:.4f} ± {std_dice:.4f}  '
+        self.log.info(f'Test -- mean Dice: {mean_dice:.4f} ± {std_dice:.4f}  '
                       f'mean IoU: {mean_iou:.4f}')
 
         self.writer.add_scalar('test/mean_dice', mean_dice)

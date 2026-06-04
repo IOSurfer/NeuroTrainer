@@ -58,14 +58,14 @@ class AugmentConfig(AbstractConfig):
 
     Naming convention
     -----------------
-    <transform>          bool  — whether the transform is active
-    <transform>_p        float — apply probability (0 = never, 1 = always)
-    <transform>_<param>  any   — transform-specific parameter
+    <transform>          bool  -- whether the transform is active
+    <transform>_p        float -- apply probability (0 = never, 1 = always)
+    <transform>_<param>  any   -- transform-specific parameter
     """
 
     config_type = 'Augment'
 
-    # Master switch — overrides all individual toggles when False
+    # Master switch -- overrides all individual toggles when False
     enabled = ConfigField(
         True, doc='Global switch; False disables all augmentation')
 
@@ -107,9 +107,9 @@ class UNet3DEncoderConfig(EncoderConfig):
     Encoder configuration for the 3D U-Net.
 
     Inherits from :class:`~config.model.base.EncoderConfig`:
-        in_channels   — set at runtime from len(DataConfig.modalities)
-        base_features — feature channels at the first encoding level
-        depth         — number of encoding / downsampling levels
+        in_channels   -- set at runtime from len(DataConfig.modalities)
+        base_features -- feature channels at the first encoding level
+        depth         -- number of encoding / downsampling levels
     """
 
     config_type = 'UNet3DEncoder'
@@ -120,7 +120,7 @@ class UNet3DDecoderConfig(DecoderConfig):
     Decoder configuration for the 3D U-Net.
 
     Inherits from :class:`~config.model.base.DecoderConfig`:
-        trilinear — True = trilinear upsampling, False = transposed conv
+        trilinear -- True = trilinear upsampling, False = transposed conv
     """
 
     config_type = 'UNet3DDecoder'

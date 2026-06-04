@@ -96,12 +96,12 @@ def build_labelmap_segmentation_subjects(
             mod_dir = subj_dir / mod
             if not mod_dir.exists():
                 print(
-                    f'[dataset] Missing modality {mod!r} for {subj_dir.name} — skipped')
+                    f'[dataset] Missing modality {mod!r} for {subj_dir.name} -- skipped')
                 skip = True
                 break
             nii = _find_nifti(mod_dir)
             if nii is None:
-                print(f'[dataset] No NIfTI in {mod_dir} — skipped')
+                print(f'[dataset] No NIfTI in {mod_dir} -- skipped')
                 skip = True
                 break
             kwargs[mod] = tio.ScalarImage(str(nii))
@@ -116,7 +116,7 @@ def build_labelmap_segmentation_subjects(
                 kwargs[label_name] = tio.LabelMap(str(nii))
         elif require_label:
             print(
-                f'[dataset] Missing label folder for {subj_dir.name} — skipped')
+                f'[dataset] Missing label folder for {subj_dir.name} -- skipped')
             continue
 
         subjects.append(tio.Subject(**kwargs))

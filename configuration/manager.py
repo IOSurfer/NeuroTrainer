@@ -1,5 +1,5 @@
 """
-ConfigManager — singleton registry of named AbstractConfig instances.
+ConfigManager -- singleton registry of named AbstractConfig instances.
 
 This module is pure infrastructure: it knows nothing about specific config
 types (DataConfig, ModelConfig, etc.).  Those live in each application under
@@ -7,7 +7,7 @@ apps/<app_name>/config.py.
 
 Usage
 -----
-Register configs (once, at startup — done in the app's train.py):
+Register configs (once, at startup -- done in the app's train.py):
     manager = ConfigManager.get()
     manager.register(ConfigManager.DATA,  MyDataConfig())
     manager.register(ConfigManager.MODEL, MyModelConfig())
@@ -37,7 +37,7 @@ class ConfigManager:
 
     _instance: Optional['ConfigManager'] = None
 
-    # Well-known type-name constants (plain strings — not tied to any class)
+    # Well-known type-name constants (plain strings -- not tied to any class)
     DATA = 'Data'
     AUGMENT = 'Augment'
     PATCH = 'Patch'

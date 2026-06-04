@@ -1,10 +1,10 @@
 """
 Model configuration base classes.
 
-ModelConfig       — base for any segmentation architecture
-EncoderConfig     — base for encoder blocks
-DecoderConfig     — base for decoder blocks
-EncoderDecoderModelConfig — composition of encoder + decoder
+ModelConfig       -- base for any segmentation architecture
+EncoderConfig     -- base for encoder blocks
+DecoderConfig     -- base for decoder blocks
+EncoderDecoderModelConfig -- composition of encoder + decoder
 
 Non-encoder-decoder architectures (e.g. SegResNet) sub-class
 ModelConfig directly and declare their own flat fields.

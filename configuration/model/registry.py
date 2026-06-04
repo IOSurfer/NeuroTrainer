@@ -1,10 +1,10 @@
 """
 Model-config registry.
 
-register_model_config  — decorator to register a ModelConfig subclass
-build_model_config     — factory: instantiate by architecture name
-available_architectures — list all registered names
-load_model_config_from_file — load from JSON, inferring the right class
+register_model_config  -- decorator to register a ModelConfig subclass
+build_model_config     -- factory: instantiate by architecture name
+available_architectures -- list all registered names
+load_model_config_from_file -- load from JSON, inferring the right class
 """
 from __future__ import annotations
 

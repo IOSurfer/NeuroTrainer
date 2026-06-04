@@ -1,5 +1,5 @@
 """
-AbstractConfig and ConfigField — base building blocks for all configuration classes.
+AbstractConfig and ConfigField -- base building blocks for all configuration classes.
 
   - _props[group][key] flat storage per group
   - Dot-path access for nested values (get_value / set_value)
@@ -66,7 +66,7 @@ class AbstractConfig:
 
     Storage layout
     --------------
-    ``_props[group][key] = value`` — each group is an independent flat
+    ``_props[group][key] = value`` -- each group is an independent flat
     key-value namespace.  The active group is ``'default'`` unless
     changed with :meth:`set_group`.
 
