@@ -74,8 +74,8 @@ def build_labelmap_segmentation_subjects(
     *require_label* is ``True``) a label folder are silently skipped.
 
     Returns a list of :class:`tio.Subject` where:
-    - Each modality → :class:`tio.ScalarImage`
-    - Label mask   → :class:`tio.LabelMap`
+    - Each modality -> :class:`tio.ScalarImage`
+    - Label mask   -> :class:`tio.LabelMap`
     - ``subject_id`` attribute set to the folder name
     """
     split_dir = Path(split_dir)
@@ -84,7 +84,8 @@ def build_labelmap_segmentation_subjects(
     if not split_dir.exists():
         print(f'[dataset] Split directory not found: {split_dir}')
         return subjects
-
+    
+    ref_img = None
     for subj_dir in sorted(split_dir.iterdir()):
         if not subj_dir.is_dir():
             continue
@@ -104,7 +105,16 @@ def build_labelmap_segmentation_subjects(
                 print(f'[dataset] No NIfTI in {mod_dir} -- skipped')
                 skip = True
                 break
-            kwargs[mod] = tio.ScalarImage(str(nii))
+
+            img = tio.ScalarImage(str(nii))
+
+            if ref_img is None:
+                ref_img = img
+                kwargs[mod] = img
+            else:
+                img = tio.ToCanonical('LPS')(img)
+                img = tio.Resample(ref_img)(img)
+                kwargs[mod] = img
 
         if skip:
             continue
@@ -113,7 +123,10 @@ def build_labelmap_segmentation_subjects(
         if label_dir.exists():
             nii = _find_nifti(label_dir)
             if nii:
-                kwargs[label_name] = tio.LabelMap(str(nii))
+                label = tio.LabelMap(str(nii))
+                label = tio.ToCanonical('LPS')(label)
+                label = tio.Resample(ref_img)(label)
+                kwargs[label_name] = label
         elif require_label:
             print(
                 f'[dataset] Missing label folder for {subj_dir.name} -- skipped')
@@ -130,7 +143,7 @@ def build_labelmap_segmentation_subjects(
 def get_preprocessing_transform() -> tio.Compose:
     """
     Build the preprocessing pipeline from ``DataConfig``.
-    Order: Resample → CropOrPad → intensity normalisation.
+    Order: Resample -> CropOrPad -> Intensity Normalization.
     """
     dcfg: DataConfig = ConfigManager.get().get_config(ConfigManager.DATA)
     transforms = []
