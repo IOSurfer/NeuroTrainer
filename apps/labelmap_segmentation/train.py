@@ -115,7 +115,7 @@ def parse_args() -> argparse.Namespace:
     g.add_argument('--lr',                  type=float, default=1e-4)
     g.add_argument('--weight_decay',        type=float, default=1e-5)
     g.add_argument('--optimizer',           default='adamw',
-                   choices=['adam', 'adamw', 'sgd'])
+                   choices=['adam', 'adamw', 'muon', 'sgd'])
     g.add_argument('--scheduler',           default='cosine',
                    choices=['cosine', 'plateau', 'step', 'none'])
     g.add_argument('--warmup_epochs',       type=int,   default=5)
@@ -293,9 +293,9 @@ class Trainer:
 
         self._setup_logging()
         ConfigManager.get().save_all(str(self.exp_dir))
-        self.log.info(f'Configs saved → {self.exp_dir}')
+        self.log.info(f'Configs saved to {self.exp_dir}')
 
-        self.log.info('Building datasets…')
+        self.log.info('Building datasets...')
         self.train_ds, self.val_ds, self.test_ds = create_labelmap_segmentation_datasets()
         self.train_loader, self.val_loader = create_data_loaders(
             self.train_ds, self.val_ds)
@@ -383,6 +383,8 @@ class Trainer:
             return optim.Adam(p, lr=c.lr, weight_decay=c.weight_decay)
         if c.type == 'adamw':
             return optim.AdamW(p, lr=c.lr, weight_decay=c.weight_decay)
+        if c.type == 'muon':
+            return optim.Muon(p, lr=c.lr, weight_decay=c.weight_decay)
         return optim.SGD(p, lr=c.lr, momentum=0.9, weight_decay=c.weight_decay, nesterov=True)
 
     def _build_scheduler(self):

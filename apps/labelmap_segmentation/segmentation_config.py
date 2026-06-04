@@ -163,7 +163,7 @@ class LossConfig(AbstractConfig):
 class OptimizerConfig(AbstractConfig):
     config_type = 'Optimizer'
 
-    type = ConfigField('adamw', doc='adam | adamw | sgd')
+    type = ConfigField('adamw', doc='adam | adamw | muon | sgd')
     lr = ConfigField(1e-4,    doc='Peak learning rate')
     weight_decay = ConfigField(1e-5)
     grad_clip = ConfigField(1.0,     doc='Max gradient L2-norm (0 = disabled)')
