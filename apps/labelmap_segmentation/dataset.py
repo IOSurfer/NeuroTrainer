@@ -184,7 +184,8 @@ def get_augmentation_transform() -> tio.Compose:
         transforms.append(tio.RandomBlur(std=a.blur_std, p=a.blur_p))
 
     if a.gamma:
-        transforms.append(tio.RandomGamma(log_gamma=a.gamma_log_gamma, p=a.gamma_p))
+        transforms.append(tio.RandomGamma(
+            log_gamma=a.gamma_log_gamma, p=a.gamma_p))
 
     return tio.Compose(transforms)
 
@@ -285,15 +286,17 @@ def create_data_loaders(
             shuffle_patches=False,
         )
         return (
-            DataLoader(train_q, batch_size=tcfg.batch_size, num_workers=0),
-            DataLoader(val_q,   batch_size=tcfg.batch_size, num_workers=0),
+            DataLoader(
+                train_q, batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size, num_workers=0),
+            DataLoader(
+                val_q,   batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size, num_workers=0),
         )
 
     return (
         DataLoader(train_dataset,
-                   batch_size=tcfg.batch_size, shuffle=True,
+                   batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size, shuffle=True,
                    num_workers=icfg.num_workers, pin_memory=True),
         DataLoader(val_dataset,
-                   batch_size=tcfg.batch_size, shuffle=False,
+                   batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size, shuffle=False,
                    num_workers=icfg.num_workers, pin_memory=True),
     )

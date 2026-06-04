@@ -184,6 +184,7 @@ class TrainingConfig(AbstractConfig):
 
     epochs = ConfigField(200)
     batch_size = ConfigField(2)
+    gradient_accumulation = ConfigField(True)
     amp = ConfigField(False, doc='Automatic mixed precision (CUDA only)')
     early_stopping = ConfigField(False)
     early_stopping_patience = ConfigField(30)

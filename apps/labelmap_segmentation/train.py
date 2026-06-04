@@ -112,6 +112,7 @@ def parse_args() -> argparse.Namespace:
     g = p.add_argument_group('Optimiser / Scheduler')
     g.add_argument('--epochs',              type=int,   default=200)
     g.add_argument('--batch_size',          type=int,   default=2)
+    g.add_argument('--gradient_accumulation', type=bool, default=True)
     g.add_argument('--lr',                  type=float, default=1e-4)
     g.add_argument('--weight_decay',        type=float, default=1e-5)
     g.add_argument('--optimizer',           default='adamw',
@@ -454,26 +455,20 @@ class Trainer:
         self.model.train()
         self._apply_warmup(epoch)
         accum_loss = accum_dice = n = 0.0
+        accum_steps = self.train_cfg.batch_size if self.train_cfg.gradient_accumulation else 1
+        self.optimizer.zero_grad(set_to_none=True)
 
         for i, batch in enumerate(self.train_loader):
             x, y = self._batch_to_tensors(batch)
             self.optimizer.zero_grad()
             logits, loss = self._forward(x, y)
 
+            loss_scaled = loss / accum_steps
+
             if self.scaler is not None:
-                self.scaler.scale(loss).backward()
-                if self.opt_cfg.grad_clip > 0:
-                    self.scaler.unscale_(self.optimizer)
-                    nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.opt_cfg.grad_clip)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+                self.scaler.scale(loss_scaled).backward()
             else:
-                loss.backward()
-                if self.opt_cfg.grad_clip > 0:
-                    nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.opt_cfg.grad_clip)
-                self.optimizer.step()
+                loss_scaled.backward()
 
             with torch.no_grad():
                 dice = compute_dice(logits, y, self.data_cfg.num_classes)
@@ -481,6 +476,29 @@ class Trainer:
             accum_loss += loss.item()
             accum_dice += dice['mean_dice']
             n += 1
+
+            do_step = ((i + 1) % accum_steps == 0) or (i == len(self.train_loader) - 1)
+
+            if do_step:
+                # grad clip after unscale
+                if self.scaler is not None:
+                    self.scaler.unscale_(self.optimizer)
+
+                if self.opt_cfg.grad_clip > 0:
+                    nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.opt_cfg.grad_clip
+                    )
+
+                # optimizer step
+                if self.scaler is not None:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    self.optimizer.step()
+
+                # reset grad
+                self.optimizer.zero_grad(set_to_none=True)
 
             if i % self.infra_cfg.log_interval == 0:
                 lr = self.optimizer.param_groups[0]['lr']
