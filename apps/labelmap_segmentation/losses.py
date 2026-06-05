@@ -1,3 +1,5 @@
+from typing import Dict, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -57,9 +59,16 @@ class DiceCELoss(nn.Module):
         self.num_classes = num_classes
         self.ce = nn.BCEWithLogitsLoss() if num_classes == 1 else nn.CrossEntropyLoss()
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, logits: torch.Tensor, targets: torch.Tensor
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Returns (total_loss, {'dice': dice_term, 'ce': ce_term}).
+        Both component tensors are detached scalars suitable for logging.
+        """
         loss_dice = self.dice(logits, targets)
         loss_ce = (self.ce(logits, targets.float())
                    if self.num_classes == 1
                    else self.ce(logits, targets.squeeze(1).long()))
-        return self.dice_weight * loss_dice + self.ce_weight * loss_ce
+        total = self.dice_weight * loss_dice + self.ce_weight * loss_ce
+        return total, {'dice': loss_dice.detach(), 'ce': loss_ce.detach()}

@@ -511,14 +511,31 @@ class Trainer:
         return x, y
 
     def _forward(self, x: torch.Tensor, y: torch.Tensor):
+        """Returns (logits, loss, components) where components maps sub-loss names to
+        detached scalar tensors.  components is empty when the criterion is not DiceCELoss."""
         if self.scaler is not None:
             with torch.amp.autocast('cuda'):
                 logits = self.model(x)
-                loss = self.criterion(logits, y)
+                raw = self.criterion(logits, y)
         else:
             logits = self.model(x)
-            loss = self.criterion(logits, y)
-        return logits, loss
+            raw = self.criterion(logits, y)
+        if isinstance(raw, tuple):
+            loss, components = raw
+        else:
+            loss, components = raw, {}
+        return logits, loss, components
+
+    def _block_grad_norms(self) -> Dict[str, float]:
+        """L2 gradient norm for each top-level child of the uncompiled model."""
+        norms: Dict[str, float] = {}
+        for name, module in self._raw_model.named_children():
+            params = [p for p in module.parameters()
+                      if p.requires_grad and p.grad is not None]
+            if params:
+                norms[name] = torch.stack(
+                    [p.grad.detach().norm() for p in params]).norm().item()
+        return norms
 
     # ── LR warmup / scheduler step ────────────────────────────────────────────
 
@@ -541,17 +558,20 @@ class Trainer:
     def train_epoch(self, epoch: int) -> Dict:
         self.model.train()
         self._apply_warmup(epoch)
-        accum_loss = accum_dice = n = 0.0
+
+        accum: Dict[str, float] = {}   # all metric sums (loss, dice_*, loss_dice, loss_ce)
+        accum_gnorms: Dict[str, float] = {}  # grad-norm sums (total + per block)
+        n = 0                           # batch counter
+        step_count = 0                  # optimizer-step counter (for grad-norm averaging)
         accum_steps = self.train_cfg.batch_size if self.train_cfg.gradient_accumulation else 1
         self.optimizer.zero_grad(set_to_none=True)
 
         for i, batch in enumerate(self.train_loader):
             x, y = self._batch_to_tensors(batch)
             self.optimizer.zero_grad()
-            logits, loss = self._forward(x, y)
+            logits, loss, components = self._forward(x, y)
 
             loss_scaled = loss / accum_steps
-
             if self.scaler is not None:
                 self.scaler.scale(loss_scaled).backward()
             else:
@@ -560,49 +580,64 @@ class Trainer:
             with torch.no_grad():
                 dice = compute_dice(logits, y, self.data_cfg.num_classes)
 
-            accum_loss += loss.item()
-            accum_dice += dice['mean_dice']
+            # Accumulate: loss + all per-class dice + sub-loss components
+            batch_m: Dict[str, float] = {'loss': loss.item(), **dice}
+            for k, v in components.items():
+                batch_m[f'loss_{k}'] = v.item()
+            for k, v in batch_m.items():
+                accum[k] = accum.get(k, 0.0) + v
             n += 1
 
             do_step = ((i + 1) % accum_steps == 0) or (i == len(self.train_loader) - 1)
 
             if do_step:
-                # grad clip after unscale
                 if self.scaler is not None:
                     self.scaler.unscale_(self.optimizer)
 
-                if self.opt_cfg.grad_clip > 0:
-                    nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.opt_cfg.grad_clip
-                    )
+                # Grad norms before clip (unscaled gradients are available here)
+                block_norms = self._block_grad_norms()
+                total_norm = nn.utils.clip_grad_norm_(
+                    self._raw_model.parameters(),
+                    self.opt_cfg.grad_clip if self.opt_cfg.grad_clip > 0 else float('inf'),
+                ).item()
+                accum_gnorms['total'] = accum_gnorms.get('total', 0.0) + total_norm
+                for blk, nrm in block_norms.items():
+                    accum_gnorms[blk] = accum_gnorms.get(blk, 0.0) + nrm
+                step_count += 1
 
-                # optimizer step
                 if self.scaler is not None:
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
                     self.optimizer.step()
 
-                # reset grad
                 self.optimizer.zero_grad(set_to_none=True)
 
                 if self.ema is not None:
                     self.ema.update(self._raw_model)
 
             if i % self.infra_cfg.log_interval == 0:
-                lr = self.optimizer.param_groups[0]['lr']
+                lr  = self.optimizer.param_groups[0]['lr']
                 step = epoch * len(self.train_loader) + i
                 self.writer.add_scalar('train/batch_loss', loss.item(), step)
-                self.writer.add_scalar(
-                    'train/batch_dice', dice['mean_dice'], step)
+                self.writer.add_scalar('train/batch_dice', dice['mean_dice'], step)
+                if 'dice' in components:
+                    self.writer.add_scalar('train/batch_loss_dice', components['dice'].item(), step)
+                if 'ce' in components:
+                    self.writer.add_scalar('train/batch_loss_ce', components['ce'].item(), step)
                 self.writer.add_scalar('train/lr', lr, step)
                 self.log.info(
                     f'Epoch {epoch:04d} | Batch {i}/{len(self.train_loader)} | '
                     f'loss {loss.item():.4f} | dice {dice["mean_dice"]:.4f} | lr {lr:.2e}'
                 )
 
-        return {'loss': accum_loss / n, 'mean_dice': accum_dice / n}
+        result = {k: v / n for k, v in accum.items()}
+        if step_count:
+            result['grad_norm'] = accum_gnorms.get('total', 0.0) / step_count
+            for blk, nrm_sum in accum_gnorms.items():
+                if blk != 'total':
+                    result[f'grad_norm_{blk}'] = nrm_sum / step_count
+        return result
 
     @torch.no_grad()
     def val_epoch(self) -> Dict:
@@ -612,7 +647,7 @@ class Trainer:
 
         for batch in self.val_loader:
             x, y = self._batch_to_tensors(batch)
-            logits, loss = self._forward(x, y)
+            logits, loss, _ = self._forward(x, y)
             dice = compute_dice(logits, y, self.data_cfg.num_classes)
             iou = compute_iou(logits,  y, self.data_cfg.num_classes)
 
@@ -630,31 +665,52 @@ class Trainer:
 
     def _log_epoch(self, epoch: int, train_m: Dict, val_m: Dict) -> None:
         n = self.data_cfg.num_classes
+
+        # ── Loss ──────────────────────────────────────────────────────────────
         self.writer.add_scalars('epoch/loss',
-                                {'train': train_m['loss'], 'val': val_m.get('loss', 0)}, epoch)
+                                {'train': train_m['loss'],
+                                 'val':   val_m.get('loss', 0)}, epoch)
+        # Sub-components (only present when using DiceCELoss)
+        for key in ('loss_dice', 'loss_ce'):
+            if key in train_m:
+                self.writer.add_scalar(f'epoch/{key}', train_m[key], epoch)
+
+        # ── Dice ──────────────────────────────────────────────────────────────
         self.writer.add_scalars('epoch/mean_dice',
                                 {'train': train_m['mean_dice'],
-                                 'val': val_m.get('mean_dice', 0)}, epoch)
+                                 'val':   val_m.get('mean_dice', 0)}, epoch)
         for c in range(1, n):
             k = f'dice_class_{c}'
+            scalars: Dict[str, float] = {}
+            if k in train_m:
+                scalars['train'] = train_m[k]
             if k in val_m:
-                self.writer.add_scalars(f'epoch/dice_class_{c}',
-                                        {'train': train_m.get(k, 0), 'val': val_m[k]}, epoch)
+                scalars['val'] = val_m[k]
+            if scalars:
+                self.writer.add_scalars(f'epoch/dice_class_{c}', scalars, epoch)
             ki = f'iou_class_{c}'
             if ki in val_m:
-                self.writer.add_scalar(
-                    f'epoch/val_iou_class_{c}', val_m[ki], epoch)
-        self.writer.add_scalar(
-            'train/lr', self.optimizer.param_groups[0]['lr'], epoch)
+                self.writer.add_scalar(f'epoch/val_iou_class_{c}', val_m[ki], epoch)
 
+        # ── Gradient norms ────────────────────────────────────────────────────
+        if 'grad_norm' in train_m:
+            self.writer.add_scalar('train/grad_norm', train_m['grad_norm'], epoch)
+        for block_name in self._raw_model._modules:
+            key = f'grad_norm_{block_name}'
+            if key in train_m:
+                self.writer.add_scalar(f'train/grad_norm_{block_name}',
+                                       train_m[key], epoch)
+
+        # ── LR ────────────────────────────────────────────────────────────────
+        self.writer.add_scalar('train/lr', self.optimizer.param_groups[0]['lr'], epoch)
+
+        # ── Weight / grad histograms (every 10 epochs) ────────────────────────
         if epoch % 10 == 0:
-            for name, param in self.model.named_parameters():
+            for name, param in self._raw_model.named_parameters():
                 if param.requires_grad:
-                    self.writer.add_histogram(
-                        f'weights/{name}', param.data, epoch)
+                    self.writer.add_histogram(f'weights/{name}', param.data, epoch)
                     if param.grad is not None:
-                        self.writer.add_histogram(
-                            f'grads/{name}', param.grad, epoch)
+                        self.writer.add_histogram(f'grads/{name}', param.grad, epoch)
 
     def _log_images(self, epoch: int) -> None:
         self.model.eval()
