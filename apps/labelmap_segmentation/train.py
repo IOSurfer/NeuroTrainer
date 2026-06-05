@@ -18,6 +18,7 @@ See --help for all options.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import sys
@@ -124,6 +125,10 @@ def parse_args() -> argparse.Namespace:
     g.add_argument('--scheduler_factor',    type=float, default=0.5)
     g.add_argument('--grad_clip',           type=float, default=1.0)
     g.add_argument('--amp',                 action='store_true')
+    g.add_argument('--ema',                 action='store_true',
+                   help='Enable EMA of model weights')
+    g.add_argument('--ema_decay',           type=float, default=0.999,
+                   help='EMA decay factor')
 
     g = p.add_argument_group('Early stopping')
     g.add_argument('--early_stopping',         action='store_true')
@@ -211,6 +216,8 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     tc.amp = args.amp
     tc.early_stopping = args.early_stopping
     tc.early_stopping_patience = args.early_stopping_patience
+    tc.ema = args.ema
+    tc.ema_decay = args.ema_decay
 
     ic = InfraConfig()
     ic.output_dir = args.output_dir
@@ -262,6 +269,40 @@ def load_manager_from_directory(directory: str) -> ConfigManager:
         m.register(type_name, cfg)
 
     return m
+
+
+# ── EMA ────────────────────────────────────────────────────────────────────────
+
+class _EMA:
+    """Shadow-parameter EMA for any nn.Module."""
+
+    def __init__(self, model: nn.Module, decay: float) -> None:
+        self.decay = decay
+        self.shadow: Dict[str, torch.Tensor] = {
+            n: p.data.clone()
+            for n, p in model.named_parameters() if p.requires_grad
+        }
+
+    def update(self, model: nn.Module) -> None:
+        with torch.no_grad():
+            for n, p in model.named_parameters():
+                if p.requires_grad:
+                    self.shadow[n].mul_(self.decay).add_(p.data, alpha=1.0 - self.decay)
+
+    def apply_shadow(self, model: nn.Module) -> None:
+        for n, p in model.named_parameters():
+            if p.requires_grad:
+                p.data.copy_(self.shadow[n])
+
+    def state_dict(self) -> dict:
+        return {
+            'decay':  self.decay,
+            'shadow': {n: v.cpu() for n, v in self.shadow.items()},
+        }
+
+    def load_state_dict(self, state: dict, device: torch.device) -> None:
+        self.decay = state['decay']
+        self.shadow = {n: v.to(device) for n, v in state['shadow'].items()}
 
 
 # ── Trainer ────────────────────────────────────────────────────────────────────
@@ -336,6 +377,13 @@ class Trainer:
             else None
         )
 
+        self.ema: Optional[_EMA] = (
+            _EMA(self.model, self.train_cfg.ema_decay)
+            if self.train_cfg.ema else None
+        )
+        if self.ema:
+            self.log.info(f'EMA enabled -- decay {self.train_cfg.ema_decay}')
+
         self.writer = SummaryWriter(log_dir=str(self.tb_dir))
         self._log_model_graph()
 
@@ -402,6 +450,22 @@ class Trainer:
         if c.type == 'step':
             return optim.lr_scheduler.StepLR(o, step_size=c.patience, gamma=c.factor)
         return None
+
+    @contextlib.contextmanager
+    def _ema_scope(self):
+        """Temporarily swap EMA shadow weights into the model, then restore."""
+        if self.ema is None:
+            yield
+            return
+        backup = {n: p.data.clone()
+                  for n, p in self.model.named_parameters() if p.requires_grad}
+        self.ema.apply_shadow(self.model)
+        try:
+            yield
+        finally:
+            for n, p in self.model.named_parameters():
+                if p.requires_grad:
+                    p.data.copy_(backup[n])
 
     def _log_model_graph(self) -> None:
         try:
@@ -499,6 +563,9 @@ class Trainer:
 
                 # reset grad
                 self.optimizer.zero_grad(set_to_none=True)
+
+                if self.ema is not None:
+                    self.ema.update(self.model)
 
             if i % self.infra_cfg.log_interval == 0:
                 lr = self.optimizer.param_groups[0]['lr']
@@ -609,6 +676,8 @@ class Trainer:
             ckpt['scheduler'] = self.scheduler.state_dict()
         if self.scaler:
             ckpt['scaler'] = self.scaler.state_dict()
+        if self.ema:
+            ckpt['ema'] = self.ema.state_dict()
 
         torch.save(ckpt, self.ckpt_dir / 'latest.pth')
         if epoch % self.infra_cfg.save_interval == 0:
@@ -628,6 +697,8 @@ class Trainer:
             self.scheduler.load_state_dict(ckpt['scheduler'])
         if 'scaler' in ckpt and self.scaler:
             self.scaler.load_state_dict(ckpt['scaler'])
+        if 'ema' in ckpt and self.ema:
+            self.ema.load_state_dict(ckpt['ema'], self.device)
 
     # ── Test evaluation ───────────────────────────────────────────────────────
 
@@ -638,6 +709,10 @@ class Trainer:
             self.log.info('Loading best checkpoint for test evaluation…')
             self._load_checkpoint(str(best))
 
+        with self._ema_scope():
+            return self._run_test()
+
+    def _run_test(self) -> float:
         self.model.eval()
         all_dice, all_iou = [], []
 
@@ -709,12 +784,12 @@ class Trainer:
             val_m: Dict = {}
 
             if (epoch + 1) % self.infra_cfg.val_interval == 0:
-                val_m = self.val_epoch()
+                with self._ema_scope():
+                    val_m = self.val_epoch()
+                    if (self.infra_cfg.log_images
+                            and (epoch + 1) % self.infra_cfg.log_images_interval == 0):
+                        self._log_images(epoch)
                 self._log_epoch(epoch, train_m, val_m)
-
-                if (self.infra_cfg.log_images
-                        and (epoch + 1) % self.infra_cfg.log_images_interval == 0):
-                    self._log_images(epoch)
 
                 if epoch >= self.sched_cfg.warmup_epochs:
                     self._step_scheduler(val_m.get('mean_dice', 0.0))
@@ -751,7 +826,9 @@ class Trainer:
             {'lr': self.opt_cfg.lr, 'batch_size': self.train_cfg.batch_size,
              'base_features': self.model_cfg.encoder.base_features,
              'optimizer': self.opt_cfg.type, 'loss': self.loss_cfg.type,
-             'patch_based': self.patch_cfg.enabled},
+             'patch_based': self.patch_cfg.enabled,
+             'ema': self.train_cfg.ema,
+             'ema_decay': self.train_cfg.ema_decay if self.train_cfg.ema else 0.0},
             {'hparam/best_val_dice': self.best_val_dice},
         )
         self.writer.close()

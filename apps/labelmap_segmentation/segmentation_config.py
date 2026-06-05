@@ -188,6 +188,8 @@ class TrainingConfig(AbstractConfig):
     amp = ConfigField(False, doc='Automatic mixed precision (CUDA only)')
     early_stopping = ConfigField(False)
     early_stopping_patience = ConfigField(30)
+    ema = ConfigField(False,  doc='Exponential moving average of model weights')
+    ema_decay = ConfigField(0.999, doc='EMA decay (closer to 1 = slower shadow update)')
 
 
 class InfraConfig(AbstractConfig):
