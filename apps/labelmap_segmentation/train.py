@@ -284,16 +284,25 @@ class _EMA:
 
     def __init__(self, model: nn.Module, decay: float) -> None:
         self.decay = decay
+        self.n_updates: int = 0
         self.shadow: Dict[str, torch.Tensor] = {
             n: p.data.clone()
             for n, p in model.named_parameters() if p.requires_grad
         }
+
+    def reset(self, model: nn.Module) -> None:
+        """Re-sync shadow to current model weights (call once at warmup end)."""
+        with torch.no_grad():
+            for n, p in model.named_parameters():
+                if p.requires_grad and n in self.shadow:
+                    self.shadow[n].copy_(p.data)
 
     def update(self, model: nn.Module) -> None:
         with torch.no_grad():
             for n, p in model.named_parameters():
                 if p.requires_grad:
                     self.shadow[n].mul_(self.decay).add_(p.data, alpha=1.0 - self.decay)
+        self.n_updates += 1
 
     def apply_shadow(self, model: nn.Module) -> None:
         for n, p in model.named_parameters():
@@ -302,13 +311,15 @@ class _EMA:
 
     def state_dict(self) -> dict:
         return {
-            'decay':  self.decay,
-            'shadow': {n: v.cpu() for n, v in self.shadow.items()},
+            'decay':     self.decay,
+            'n_updates': self.n_updates,
+            'shadow':    {n: v.cpu() for n, v in self.shadow.items()},
         }
 
     def load_state_dict(self, state: dict, device: torch.device) -> None:
-        self.decay = state['decay']
-        self.shadow = {n: v.to(device) for n, v in state['shadow'].items()}
+        self.decay     = state['decay']
+        self.n_updates = state.get('n_updates', 0)
+        self.shadow    = {n: v.to(device) for n, v in state['shadow'].items()}
 
 
 # ── Trainer ────────────────────────────────────────────────────────────────────
@@ -476,8 +487,9 @@ class Trainer:
 
     @contextlib.contextmanager
     def _ema_scope(self):
-        """Temporarily swap EMA shadow weights into the model, then restore."""
-        if self.ema is None:
+        """Temporarily swap EMA shadow weights into the model, then restore.
+        No-op until at least one EMA update has been applied (i.e. warmup is over)."""
+        if self.ema is None or self.ema.n_updates == 0:
             yield
             return
         backup = {n: p.data.clone()
@@ -558,6 +570,12 @@ class Trainer:
     def train_epoch(self, epoch: int) -> Dict:
         self.model.train()
         self._apply_warmup(epoch)
+
+        # First EMA-active epoch: sync shadow to trained weights before starting updates.
+        if self.ema is not None and epoch == self.sched_cfg.warmup_epochs:
+            self.ema.reset(self._raw_model)
+            self.log.info(
+                f'Epoch {epoch}: warmup complete -- EMA shadow synced to current model weights')
 
         accum: Dict[str, float] = {}   # all metric sums (loss, dice_*, loss_dice, loss_ce)
         accum_gnorms: Dict[str, float] = {}  # grad-norm sums (total + per block)
