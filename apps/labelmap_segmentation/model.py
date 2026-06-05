@@ -8,13 +8,15 @@ class DoubleConv(nn.Module):
         super().__init__()
         if mid_ch is None:
             mid_ch = out_ch
+        num_groups_mid = min(8, mid_ch // 4)
+        num_groups_out = min(8, out_ch // 4)
         self.block = nn.Sequential(
             nn.Conv3d(in_ch, mid_ch, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm3d(mid_ch),
-            nn.ReLU(inplace=True),
+            nn.GroupNorm(num_groups_mid, num_channels=mid_ch),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
             nn.Conv3d(mid_ch, out_ch, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm3d(out_ch),
-            nn.ReLU(inplace=True),
+            nn.GroupNorm(num_groups_out, num_channels=out_ch),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -96,10 +98,7 @@ class UNet3D(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Conv3d):
                 nn.init.kaiming_normal_(
-                    m.weight, mode='fan_out', nonlinearity='relu')
-            elif isinstance(m, nn.BatchNorm3d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
+                    m.weight, mode='fan_out', nonlinearity='LeakyReLU')
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         e1 = self.enc1(x)
