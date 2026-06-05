@@ -136,12 +136,16 @@ class UNet3DConfig(EncoderDecoderModelConfig):
     Access pattern::
 
         cfg = UNet3DConfig()
-        cfg.encoder.base_features = 32
-        cfg.encoder.in_channels   = 2    # set after modality discovery
-        cfg.decoder.trilinear     = True
+        cfg.encoder.base_features      = 32
+        cfg.encoder.in_channels        = 2    # set after modality discovery
+        cfg.decoder.trilinear          = True
+        cfg.num_supervision_levels     = 1    # >1 enables deep supervision
     """
 
     config_type = 'Model'
+
+    num_supervision_levels = ConfigField(
+        1, doc='1 = single output; >1 = deep supervision with auxiliary heads')
 
     def __init__(self, file_path: str = '') -> None:
         super().__init__(

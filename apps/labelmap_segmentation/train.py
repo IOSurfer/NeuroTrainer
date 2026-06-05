@@ -100,9 +100,11 @@ def parse_args() -> argparse.Namespace:
                    help='Enable random elastic deformation (disabled by default)')
 
     g = p.add_argument_group('Model')
-    g.add_argument('--base_features', type=int, default=32)
-    g.add_argument('--trilinear',     action='store_true', default=True)
-    g.add_argument('--no_trilinear',  action='store_false', dest='trilinear')
+    g.add_argument('--base_features',         type=int, default=32)
+    g.add_argument('--trilinear',             action='store_true', default=True)
+    g.add_argument('--no_trilinear',          action='store_false', dest='trilinear')
+    g.add_argument('--num_supervision_levels', type=int, default=1,
+                   help='1 = standard; >1 = deep supervision with auxiliary heads')
 
     g = p.add_argument_group('Loss')
     g.add_argument('--loss',        default='dice_ce',
@@ -189,8 +191,9 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     ac.elastic = args.elastic
 
     mc = UNet3DConfig()
-    mc.encoder.base_features = args.base_features
-    mc.decoder.trilinear = args.trilinear
+    mc.encoder.base_features  = args.base_features
+    mc.decoder.trilinear       = args.trilinear
+    mc.num_supervision_levels  = args.num_supervision_levels
     # encoder.in_channels is resolved in Trainer after modality auto-discovery
 
     lc = LossConfig()
@@ -362,6 +365,7 @@ class Trainer:
             num_classes=self.data_cfg.num_classes,
             base_features=self.model_cfg.encoder.base_features,
             trilinear=self.model_cfg.decoder.trilinear,
+            num_supervision_levels=self.model_cfg.num_supervision_levels,
         ).to(self.device)
 
         n_params = sum(p.numel()

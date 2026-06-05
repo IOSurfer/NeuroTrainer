@@ -33,8 +33,8 @@ class SubjectVerification:
     subject_id: str
     valid:      bool
     issues:     List[str]        = field(default_factory=list)
-    shapes:     Dict[str, tuple] = field(default_factory=dict)   # channel → shape
-    spacings:   Dict[str, tuple] = field(default_factory=dict)   # channel → spacing
+    shapes:     Dict[str, tuple] = field(default_factory=dict)   # channel -> shape
+    spacings:   Dict[str, tuple] = field(default_factory=dict)   # channel -> spacing
 
 
 @dataclass
@@ -66,8 +66,8 @@ class SplitReport:
     verifications: List[SubjectVerification] = field(default_factory=list)
     intensity:     List[IntensityStats]      = field(default_factory=list)
     label_classes: List[LabelClassStats]     = field(default_factory=list)
-    shape_counts:  Dict[str, Counter]        = field(default_factory=dict)   # modality → Counter
-    spacing_data:  Dict[str, List[tuple]]    = field(default_factory=dict)   # modality → list
+    shape_counts:  Dict[str, Counter]        = field(default_factory=dict)   # modality -> Counter
+    spacing_data:  Dict[str, List[tuple]]    = field(default_factory=dict)   # modality -> list
 
     @property
     def n_total(self) -> int:

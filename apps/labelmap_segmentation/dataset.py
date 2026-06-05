@@ -5,9 +5,9 @@ Expected directory layout:
     <data_root>/
     ├── train/
     │   ├── subject_001/
-    │   │   ├── T1/   *.nii.gz   →  tio.ScalarImage
-    │   │   ├── T2/   *.nii.gz   →  tio.ScalarImage
-    │   │   └── label/ *.nii.gz  →  tio.LabelMap
+    │   │   ├── T1/   *.nii.gz   ->  tio.ScalarImage
+    │   │   ├── T2/   *.nii.gz   ->  tio.ScalarImage
+    │   │   └── label/ *.nii.gz  ->  tio.LabelMap
     │   └── subject_002/ ...
     ├── validation/
     └── test/
@@ -167,8 +167,8 @@ def get_augmentation_transform() -> tio.Compose:
     When the global ``enabled`` flag is ``False`` the result is an empty
     :class:`tio.Compose` (all transforms skipped).
 
-    Transform order: spatial (Flip → Affine → Elastic) then
-    intensity (Noise → Blur → Gamma).
+    Transform order: spatial (Flip -> Affine -> Elastic) then
+    intensity (Noise -> Blur -> Gamma).
     """
     a: AugmentConfig = ConfigManager.get().get_config(ConfigManager.AUGMENT)
     transforms = []
