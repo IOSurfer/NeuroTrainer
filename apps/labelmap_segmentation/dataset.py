@@ -308,8 +308,8 @@ def create_data_loaders(
     return (
         DataLoader(train_dataset,
                    batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size, shuffle=True,
-                   num_workers=icfg.num_workers, pin_memory=True),
+                   num_workers=icfg.num_workers, pin_memory=False),
         DataLoader(val_dataset,
                    batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size, shuffle=False,
-                   num_workers=icfg.num_workers, pin_memory=True),
+                   num_workers=icfg.num_workers, pin_memory=False),
     )
