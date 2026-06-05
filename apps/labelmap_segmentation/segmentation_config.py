@@ -210,3 +210,5 @@ class InfraConfig(AbstractConfig):
     log_interval = ConfigField(10)
     log_images = ConfigField(False)
     log_images_interval = ConfigField(10)
+    torch_compile = ConfigField(
+        False, doc='torch.compile(model, dynamic=False) for faster training (PyTorch >= 2.0)')

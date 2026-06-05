@@ -149,6 +149,8 @@ def parse_args() -> argparse.Namespace:
     g.add_argument('--log_interval',        type=int, default=10)
     g.add_argument('--log_images',          action='store_true')
     g.add_argument('--log_images_interval', type=int, default=10)
+    g.add_argument('--torch_compile',       action='store_true',
+                   help='torch.compile(model, dynamic=False) -- requires PyTorch >= 2.0')
 
     return p.parse_args()
 
@@ -234,6 +236,7 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     ic.log_interval = args.log_interval
     ic.log_images = args.log_images
     ic.log_images_interval = args.log_images_interval
+    ic.torch_compile = args.torch_compile
 
     m.register(ConfigManager.DATA,      dc)
     m.register(ConfigManager.PATCH,     pc)
@@ -390,6 +393,15 @@ class Trainer:
 
         self.writer = SummaryWriter(log_dir=str(self.tb_dir))
         self._log_model_graph()
+
+        if self.infra_cfg.torch_compile:
+            if hasattr(torch, 'compile'):
+                self.log.info('torch.compile(dynamic=False) -- first batch triggers compilation')
+                self.model = torch.compile(self.model, dynamic=False)
+            else:
+                self.log.warning(
+                    'torch_compile=True but torch.compile is unavailable '
+                    '(requires PyTorch >= 2.0) -- skipped')
 
         self.start_epoch = 0
         self.best_val_dice = -float('inf')
