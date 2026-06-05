@@ -13,10 +13,10 @@ UNet3D
 
 Forward entry points on UNet3D
 -------------------------------
-forward(x)         -> Tensor            main logits [B, C, D, H, W]
+forward(x)         -> Tensor            main logits [B, C, D, H, W]  float32
 forward_train(x)   -> List[Tensor]      logits per supervision level (finest first)
-forward_eval(x)    -> (Tensor, Tensor)  (labelmap [B,D,H,W], uncertainty [B,D,H,W])
-forward_infer(x)   -> Tensor            argmax labelmap [B, D, H, W]
+forward_eval(x)    -> (Tensor, Tensor)  labelmap [B,D,H,W] uint8, uncertainty [B,D,H,W] float32
+forward_infer(x)   -> Tensor            argmax labelmap [B, D, H, W]  uint8
 """
 from __future__ import annotations
 
@@ -223,13 +223,13 @@ class EvalHead(nn.Module):
     def forward(self, logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.num_classes == 1:
             probs   = torch.sigmoid(logits).squeeze(1)        # [B, D, H, W]
-            labelmap = (probs > 0.5).long()
+            labelmap = (probs > 0.5).to(torch.uint8)
             p        = probs.clamp(1e-6, 1 - 1e-6)
             entropy  = -(p * torch.log(p) + (1 - p) * torch.log(1 - p))
             uncertainty = (entropy / math.log(2)).clamp(0.0, 1.0)
         else:
             probs   = F.softmax(logits, dim=1)                 # [B, C, D, H, W]
-            labelmap = probs.argmax(dim=1)
+            labelmap = probs.argmax(dim=1).to(torch.uint8)
             entropy  = -(probs * torch.log(probs.clamp(min=1e-8))).sum(dim=1)
             uncertainty = (entropy / self._max_entropy).clamp(0.0, 1.0)
         return labelmap, uncertainty
@@ -240,7 +240,7 @@ class InferHead(nn.Module):
     Fastest inference head: argmax over raw logits (softmax skipped — monotone).
 
     Input : logits [B, C, D, H, W]
-    Output: labelmap [B, D, H, W]  int64 class indices
+    Output: labelmap [B, D, H, W]  uint8 class indices
 
     No trainable parameters.
     """
@@ -248,8 +248,8 @@ class InferHead(nn.Module):
     @torch.no_grad()
     def forward(self, logits: torch.Tensor) -> torch.Tensor:
         if logits.size(1) == 1:
-            return (logits.squeeze(1) > 0.0).long()
-        return logits.argmax(dim=1)
+            return (logits.squeeze(1) > 0.0).to(torch.uint8)
+        return logits.argmax(dim=1).to(torch.uint8)
 
 
 # ── Composite model ────────────────────────────────────────────────────────────
