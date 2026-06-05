@@ -177,7 +177,7 @@ class SchedulerConfig(AbstractConfig):
     config_type = 'Scheduler'
 
     type = ConfigField('cosine', doc='cosine | plateau | step | none')
-    warmup_epochs = ConfigField(5,        doc='Linear LR warm-up epochs')
+    warmup_epochs = ConfigField(30,       doc='Linear LR warm-up epochs')
     patience = ConfigField(
         10,       doc='ReduceLROnPlateau patience / StepLR step')
     factor = ConfigField(0.5,      doc='LR decay multiplier')

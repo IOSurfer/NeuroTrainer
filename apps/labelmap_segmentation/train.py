@@ -122,7 +122,7 @@ def parse_args() -> argparse.Namespace:
                    choices=['adam', 'adamw', 'muon', 'sgd'])
     g.add_argument('--scheduler',           default='cosine',
                    choices=['cosine', 'plateau', 'step', 'none'])
-    g.add_argument('--warmup_epochs',       type=int,   default=5)
+    g.add_argument('--warmup_epochs',       type=int,   default=30)
     g.add_argument('--scheduler_patience',  type=int,   default=10)
     g.add_argument('--scheduler_factor',    type=float, default=0.5)
     g.add_argument('--grad_clip',           type=float, default=1.0)
@@ -613,7 +613,7 @@ class Trainer:
 
                 self.optimizer.zero_grad(set_to_none=True)
 
-                if self.ema is not None:
+                if self.ema is not None and epoch >= self.sched_cfg.warmup_epochs:
                     self.ema.update(self._raw_model)
 
             if i % self.infra_cfg.log_interval == 0:
