@@ -189,7 +189,7 @@ class TrainingConfig(AbstractConfig):
     early_stopping = ConfigField(False)
     early_stopping_patience = ConfigField(30)
     ema = ConfigField(False,  doc='Exponential moving average of model weights')
-    ema_decay = ConfigField(0.999, doc='EMA decay (closer to 1 = slower shadow update)')
+    ema_decay = ConfigField(0.99, doc='EMA decay (closer to 1 = slower shadow update)')
 
 
 class InfraConfig(AbstractConfig):
