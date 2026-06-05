@@ -394,6 +394,13 @@ class Trainer:
         self.writer = SummaryWriter(log_dir=str(self.tb_dir))
         self._log_model_graph()
 
+        # _raw_model always refers to the original UNet3D (never the compiled wrapper).
+        # EMA must use it because torch.compile renames parameters with an '_orig_mod.'
+        # prefix in named_parameters(), which would break the shadow-dict key lookup.
+        # The compiled model and _raw_model share the same parameter tensors, so
+        # applying EMA weights to _raw_model is instantly visible during forward passes.
+        self._raw_model: nn.Module = self.model
+
         if self.infra_cfg.torch_compile:
             if hasattr(torch, 'compile'):
                 self.log.info('torch.compile(dynamic=False) -- first batch triggers compilation')
@@ -474,12 +481,12 @@ class Trainer:
             yield
             return
         backup = {n: p.data.clone()
-                  for n, p in self.model.named_parameters() if p.requires_grad}
-        self.ema.apply_shadow(self.model)
+                  for n, p in self._raw_model.named_parameters() if p.requires_grad}
+        self.ema.apply_shadow(self._raw_model)
         try:
             yield
         finally:
-            for n, p in self.model.named_parameters():
+            for n, p in self._raw_model.named_parameters():
                 if p.requires_grad:
                     p.data.copy_(backup[n])
 
@@ -581,7 +588,7 @@ class Trainer:
                 self.optimizer.zero_grad(set_to_none=True)
 
                 if self.ema is not None:
-                    self.ema.update(self.model)
+                    self.ema.update(self._raw_model)
 
             if i % self.infra_cfg.log_interval == 0:
                 lr = self.optimizer.param_groups[0]['lr']
