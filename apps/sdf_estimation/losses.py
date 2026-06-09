@@ -28,6 +28,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+import torch
+import torch.nn.functional as F
+
+
 def _eikonal_loss(pred: torch.Tensor) -> torch.Tensor:
     """
     Compute the Eikonal loss for a batch of SDF predictions.
@@ -36,25 +40,54 @@ def _eikonal_loss(pred: torch.Tensor) -> torch.Tensor:
         pred: ``[B, C, D, H, W]`` predicted SDF values (raw float32).
 
     Returns:
-        Scalar loss  ``mean( |‖∇pred‖ - 1| )``.
+        Scalar loss  ``mean( |L2(\Delta pred) - 1| )``.
     """
-    # Forward finite differences along each spatial axis
-    gd = pred[:, :, 1:, :,  :] - pred[:, :, :-1, :,  :]   # [B, C, D-1, H,   W  ]
-    gh = pred[:, :, :,  1:, :] - pred[:, :, :,  :-1, :]   # [B, C, D,   H-1, W  ]
-    gw = pred[:, :, :,  :,  1:] - pred[:, :, :,  :, :-1]  # [B, C, D,   H,   W-1]
 
-    # Trim to the common inner region [B, C, D-1, H-1, W-1]
-    D_inner = gd.shape[2]   # D - 1
-    H_inner = gh.shape[3]   # H - 1
-    W_inner = gw.shape[4]   # W - 1
+    device = pred.device
+    dtype = pred.dtype
+    C = pred.shape[1]
 
-    gd = gd[:, :,        :, :H_inner, :W_inner]
-    gh = gh[:, :, :D_inner, :,        :W_inner]
-    gw = gw[:, :, :D_inner, :H_inner, :]
+    # d/dD
+    kernel_d = torch.zeros((C, 1, 3, 1, 1), device=device, dtype=dtype)
+    kernel_d[:, 0, :, 0, 0] = torch.tensor(
+        [-0.5, 0.0, 0.5],
+        device=device,
+        dtype=dtype
+    )
 
-    grad_mag = torch.sqrt(gd ** 2 + gh ** 2 + gw ** 2 + 1e-8)
+    # d/dH
+    kernel_h = torch.zeros((C, 1, 1, 3, 1), device=device, dtype=dtype)
+    kernel_h[:, 0, 0, :, 0] = torch.tensor(
+        [-0.5, 0.0, 0.5],
+        device=device,
+        dtype=dtype
+    )
+
+    # d/dW
+    kernel_w = torch.zeros((C, 1, 1, 1, 3), device=device, dtype=dtype)
+    kernel_w[:, 0, 0, 0, :] = torch.tensor(
+        [-0.5, 0.0, 0.5],
+        device=device,
+        dtype=dtype
+    )
+
+    # replicate padding
+    pred_pad_d = F.pad(pred, (0, 0, 0, 0, 1, 1), mode="replicate")
+    pred_pad_h = F.pad(pred, (0, 0, 1, 1, 0, 0), mode="replicate")
+    pred_pad_w = F.pad(pred, (1, 1, 0, 0, 0, 0), mode="replicate")
+
+    gd = F.conv3d(pred_pad_d, kernel_d, groups=C)
+    gh = F.conv3d(pred_pad_h, kernel_h, groups=C)
+    gw = F.conv3d(pred_pad_w, kernel_w, groups=C)
+
+    grad_mag = torch.sqrt(
+        gd * gd +
+        gh * gh +
+        gw * gw +
+        1e-8
+    )
+
     return (grad_mag - 1.0).abs().mean()
-
 
 class SDFLoss(nn.Module):
     """
