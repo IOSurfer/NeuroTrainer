@@ -10,7 +10,7 @@ Combined loss with two terms:
    everywhere.
 
 2. **Eikonal** -- penalises deviations of the predicted gradient magnitude from
-   unity ( ``‖∇SDF‖ = 1`` ).  This is the fundamental property of a signed
+   unity ( ``L2(\Nabla SDF) = 1`` ).  This is the fundamental property of a signed
    distance field and helps the network produce geometrically valid outputs.
 
    Gradients are approximated with forward finite differences along each of the
@@ -40,7 +40,7 @@ def _eikonal_loss(pred: torch.Tensor) -> torch.Tensor:
         pred: ``[B, C, D, H, W]`` predicted SDF values (raw float32).
 
     Returns:
-        Scalar loss  ``mean( |L2(\Delta pred) - 1| )``.
+        Scalar loss  ``mean( |L2(\Nabla pred) - 1| )``.
     """
 
     device = pred.device
