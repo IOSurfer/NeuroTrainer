@@ -14,7 +14,7 @@ Key differences from the segmentation UNet
 - Output is raw float32 (no softmax / sigmoid); values represent signed
   distances in the same physical units as the ground-truth SDF files.
 - ``num_sdf_fields`` replaces ``num_classes``; the head is a single linear
-  1×1×1 convolution (no activation).
+  1x1x1 convolution (no activation).
 - No EvalHead / InferHead are needed -- the raw output IS the prediction.
 - Deep supervision is not included; the SDF Eikonal loss must be applied at
   full resolution to be physically meaningful.
@@ -161,12 +161,34 @@ class SDFHead(nn.Module):
         num_sdf_fields: Number of SDF outputs to predict simultaneously.
     """
 
-    def __init__(self, base_features: int, num_sdf_fields: int) -> None:
+    def __init__(
+        self,
+        base_features: int,
+        num_sdf_fields: int,
+    ) -> None:
         super().__init__()
-        self.conv = nn.Conv3d(base_features, num_sdf_fields, kernel_size=1)
+
+        hidden_features = base_features // 2
+
+        self.head = nn.Sequential(
+            nn.Conv3d(
+                base_features,
+                hidden_features,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            nn.InstanceNorm3d(hidden_features),
+            nn.LeakyReLU(0.01, inplace=True),
+            nn.Conv3d(
+                hidden_features,
+                num_sdf_fields,
+                kernel_size=1,
+            ),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.conv(x)
+        return self.head(x)
 
 
 # ── Composite model ────────────────────────────────────────────────────────────
