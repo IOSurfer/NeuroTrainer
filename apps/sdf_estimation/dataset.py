@@ -120,7 +120,6 @@ def build_sdf_subjects(
                 ref_img = img
                 kwargs[mod] = img
             else:
-                img = tio.ToCanonical('LPS')(img)
                 img = tio.Resample(ref_img)(img)
                 kwargs[mod] = img
 
@@ -145,7 +144,6 @@ def build_sdf_subjects(
                 continue
             # Load SDF as ScalarImage; TorchIO reads float32 NIfTI natively.
             sdf_img = tio.ScalarImage(str(nii))
-            sdf_img = tio.ToCanonical('LPS')(sdf_img)
             sdf_img = tio.Resample(ref_img)(sdf_img)
             kwargs[sdf] = sdf_img
 

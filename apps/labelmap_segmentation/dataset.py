@@ -112,7 +112,6 @@ def build_labelmap_segmentation_subjects(
                 ref_img = img
                 kwargs[mod] = img
             else:
-                img = tio.ToCanonical('LPS')(img)
                 img = tio.Resample(ref_img)(img)
                 kwargs[mod] = img
 
@@ -124,7 +123,6 @@ def build_labelmap_segmentation_subjects(
             nii = _find_nifti(label_dir)
             if nii:
                 label = tio.LabelMap(str(nii))
-                label = tio.ToCanonical('LPS')(label)
                 label = tio.Resample(ref_img)(label)
                 kwargs[label_name] = label
         elif require_label:
