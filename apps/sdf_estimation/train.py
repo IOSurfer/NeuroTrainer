@@ -693,42 +693,67 @@ class Trainer:
                         self.writer.add_histogram(f'grads/{name}', param.grad, epoch)
 
     def _log_images(self, epoch: int) -> None:
-        """Log mid-slice visualisations: first modality, first SDF field (pred vs GT)."""
+        """Log mid-slice visualisations for ALL SDF channels."""
         self.model.eval()
         try:
             batch = next(iter(self.val_loader))
-            x, y  = self._batch_to_tensors(batch)
+            x, y = self._batch_to_tensors(batch)
+
             with torch.no_grad():
                 pred = self.model(x)
 
-            # First modality image (normalise to [0, 1])
+            # First modality image (normalize to [0, 1])
             img = x[0, 0]
             img = (img - img.min()) / (img.max() - img.min() + 1e-8)
-
-            # First SDF field: normalise pred & GT to [0, 1] for display
-            sdf_pred = pred[0, 0]
-            sdf_gt   = y[0, 0]
-            lo = min(sdf_pred.min(), sdf_gt.min())
-            hi = max(sdf_pred.max(), sdf_gt.max())
-            rng = hi - lo + 1e-8
-            sdf_pred = (sdf_pred - lo) / rng
-            sdf_gt   = (sdf_gt   - lo) / rng
 
             D, H, W = img.shape
 
             def _row(*slices):
                 return torch.stack([s.unsqueeze(0) for s in slices])
 
-            self.writer.add_images('slices/axial',
-                                   _row(img[D//2], sdf_gt[D//2], sdf_pred[D//2]), epoch)
-            self.writer.add_images('slices/coronal',
-                                   _row(img[:, H//2, :], sdf_gt[:, H//2, :],
-                                        sdf_pred[:, H//2, :]), epoch)
-            self.writer.add_images('slices/sagittal',
-                                   _row(img[:, :, W//2], sdf_gt[:, :, W//2],
-                                        sdf_pred[:, :, W//2]), epoch)
+            C = pred.shape[1]  # number of SDF channels
+
+            for c in range(C):
+                sdf_pred = pred[0, c]
+                sdf_gt   = y[0, c]
+
+                # normalize per-channel jointly
+                lo = min(sdf_pred.min(), sdf_gt.min())
+                hi = max(sdf_pred.max(), sdf_gt.max())
+                rng = hi - lo + 1e-8
+
+                sdf_pred_n = (sdf_pred - lo) / rng
+                sdf_gt_n   = (sdf_gt   - lo) / rng
+
+                tag_prefix = f"slices/sdf_channel_{c}"
+
+                # axial
+                self.writer.add_images(
+                    f"{tag_prefix}/axial",
+                    _row(img[D//2], sdf_gt_n[D//2], sdf_pred_n[D//2]),
+                    epoch
+                )
+
+                # coronal
+                self.writer.add_images(
+                    f"{tag_prefix}/coronal",
+                    _row(img[:, H//2, :],
+                        sdf_gt_n[:, H//2, :],
+                        sdf_pred_n[:, H//2, :]),
+                    epoch
+                )
+
+                # sagittal
+                self.writer.add_images(
+                    f"{tag_prefix}/sagittal",
+                    _row(img[:, :, W//2],
+                        sdf_gt_n[:, :, W//2],
+                        sdf_pred_n[:, :, W//2]),
+                    epoch
+                )
+
         except Exception as exc:
-            self.log.warning(f'Image logging failed: {exc}')
+            self.log.warning(f"Image logging failed: {exc}")
 
     # ── Checkpoint I/O ────────────────────────────────────────────────────────
 
