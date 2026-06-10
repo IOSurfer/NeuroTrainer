@@ -11,7 +11,7 @@ Key differences from labelmap_segmentation
 - Multiple SDF fields can be predicted simultaneously (``sdf_names`` / ``num_sdf_fields``).
 - Patch-based training is not supported (SDF estimation is a global problem).
 - Intensity augmentations (Noise, Blur, Gamma) are applied to input modalities only.
-- Loss is MSE + Eikonal (``|\Delta SDF| = 1`` constraint).
+- Loss is MSE + Eikonal (``|Nabla SDF| = 1`` constraint).
 """
 
 from configuration.base import AbstractConfig, ConfigField

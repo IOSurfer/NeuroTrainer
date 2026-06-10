@@ -10,15 +10,14 @@ Combined loss with two terms:
    everywhere.
 
 2. **Eikonal** -- penalises deviations of the predicted gradient magnitude from
-   unity ( ``L2(\Nabla SDF) = 1`` ).  This is the fundamental property of a signed
+   unity ( L2(Nabla SDF) = 1 ).  This is the fundamental property of a signed
    distance field and helps the network produce geometrically valid outputs.
 
    Gradients are approximated with forward finite differences along each of the
    three spatial axes and the magnitude is computed over the inner voxel region
    where all three partial derivatives are defined.
 
-Both terms are averaged over all SDF channels so they scale naturally when
-``num_sdf_fields > 1``.
+Both terms are averaged over all SDF channels so they scale naturally when num_sdf_fields > 1.
 """
 
 from typing import Dict, Tuple
@@ -37,10 +36,10 @@ def _eikonal_loss(pred: torch.Tensor) -> torch.Tensor:
     Compute the Eikonal loss for a batch of SDF predictions.
 
     Args:
-        pred: ``[B, C, D, H, W]`` predicted SDF values (raw float32).
+        pred: [B, C, D, H, W] predicted SDF values (raw float32).
 
     Returns:
-        Scalar loss  ``mean( |L2(\Nabla pred) - 1| )``.
+        Scalar loss  mean( |L2(Nabla pred) - 1| ).
     """
 
     device = pred.device
