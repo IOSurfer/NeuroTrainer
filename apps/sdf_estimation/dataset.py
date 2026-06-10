@@ -166,7 +166,7 @@ def get_preprocessing_transform(modalities: List[str]) -> tio.Compose:
         transforms.append(tio.CropOrPad(dcfg.target_shape))
     if dcfg.normalization == 'znorm':
         transforms.append(tio.ZNormalization(
-            masking_method=tio.ZNormalization.mean,
+            masking_method=None,
             include=list(modalities),
         ))
     elif dcfg.normalization == 'rescale':
