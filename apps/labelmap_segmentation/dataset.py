@@ -85,7 +85,6 @@ def build_labelmap_segmentation_subjects(
         print(f'[dataset] Split directory not found: {split_dir}')
         return subjects
     
-    ref_img = None
     for subj_dir in sorted(split_dir.iterdir()):
         if not subj_dir.is_dir():
             continue
@@ -107,13 +106,7 @@ def build_labelmap_segmentation_subjects(
                 break
 
             img = tio.ScalarImage(str(nii))
-
-            if ref_img is None:
-                ref_img = img
-                kwargs[mod] = img
-            else:
-                img = tio.Resample(ref_img)(img)
-                kwargs[mod] = img
+            kwargs[mod] = img
 
         if skip:
             continue
@@ -123,7 +116,6 @@ def build_labelmap_segmentation_subjects(
             nii = _find_nifti(label_dir)
             if nii:
                 label = tio.LabelMap(str(nii))
-                label = tio.Resample(ref_img)(label)
                 kwargs[label_name] = label
         elif require_label:
             print(

@@ -94,7 +94,6 @@ def build_sdf_subjects(
         print(f'[dataset] Split directory not found: {split_dir}')
         return subjects
 
-    ref_img = None
     for subj_dir in sorted(split_dir.iterdir()):
         if not subj_dir.is_dir():
             continue
@@ -116,12 +115,7 @@ def build_sdf_subjects(
                 break
 
             img = tio.ScalarImage(str(nii))
-            if ref_img is None:
-                ref_img = img
-                kwargs[mod] = img
-            else:
-                img = tio.Resample(ref_img)(img)
-                kwargs[mod] = img
+            kwargs[mod] = img
 
         if skip:
             continue
@@ -144,7 +138,6 @@ def build_sdf_subjects(
                 continue
             # Load SDF as ScalarImage; TorchIO reads float32 NIfTI natively.
             sdf_img = tio.ScalarImage(str(nii))
-            sdf_img = tio.Resample(ref_img)(sdf_img)
             kwargs[sdf] = sdf_img
 
         if skip:
