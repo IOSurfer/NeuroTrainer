@@ -55,7 +55,7 @@ class Up(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, trilinear: bool = True) -> None:
         super().__init__()
         if trilinear:
-            self.up = nn.Upsample(scale_factor=2, mode="trilinear", align_corners=True)
+            self.up = nn.Upsample(scale_factor=2, mode="trilinear", align_corners=False)
             self.conv = DoubleConv(in_ch, out_ch, in_ch // 2)
         else:
             self.up = nn.ConvTranspose3d(in_ch, in_ch // 2, kernel_size=2, stride=2)
