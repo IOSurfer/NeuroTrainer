@@ -66,6 +66,7 @@ def build_labelmap_segmentation_subjects(
     modalities: List[str],
     label_name: str,
     require_label: bool = True,
+    mask_names: Optional[List[str]] = None,
 ) -> List[tio.Subject]:
     """
     Load all valid subjects for label-map segmentation.
@@ -73,9 +74,16 @@ def build_labelmap_segmentation_subjects(
     Subjects missing a modality folder, a NIfTI file, or (when
     *require_label* is ``True``) a label folder are silently skipped.
 
+    *mask_names* are additional labelmap folders loaded for use as
+    normalization / foreground masks (see ``DataConfig.znorm_mask_name`` and
+    ``DataConfig.foreground_mask_name``). Subjects missing one of these
+    folders are skipped. Names equal to *label_name* are ignored -- the
+    segmentation label doubles as that mask.
+
     Returns a list of :class:`tio.Subject` where:
     - Each modality -> :class:`tio.ScalarImage`
     - Label mask   -> :class:`tio.LabelMap`
+    - Extra masks  -> :class:`tio.LabelMap`, keyed by folder name
     - ``subject_id`` attribute set to the folder name
     """
     split_dir = Path(split_dir)
@@ -84,7 +92,12 @@ def build_labelmap_segmentation_subjects(
     if not split_dir.exists():
         print(f'[dataset] Split directory not found: {split_dir}')
         return subjects
-    
+
+    extra_masks = [
+        name for name in dict.fromkeys(mask_names or [])
+        if name and name != label_name
+    ]
+
     for subj_dir in sorted(split_dir.iterdir()):
         if not subj_dir.is_dir():
             continue
@@ -122,6 +135,19 @@ def build_labelmap_segmentation_subjects(
                 f'[dataset] Missing label folder for {subj_dir.name} -- skipped')
             continue
 
+        for mask_name in extra_masks:
+            mask_dir = subj_dir / mask_name
+            nii = _find_nifti(mask_dir) if mask_dir.exists() else None
+            if nii is None:
+                print(
+                    f'[dataset] Missing mask {mask_name!r} for {subj_dir.name} -- skipped')
+                skip = True
+                break
+            kwargs[mask_name] = tio.LabelMap(str(nii))
+
+        if skip:
+            continue
+
         subjects.append(tio.Subject(**kwargs))
 
     print(f'[dataset] Loaded {len(subjects)} subjects from {split_dir}')
@@ -130,10 +156,31 @@ def build_labelmap_segmentation_subjects(
 
 # ── Transforms ────────────────────────────────────────────────────────────────
 
+class ZeroOutsideMask(tio.Transform):
+    """
+    Zero out intensity-image voxels outside a labelmap's non-zero region.
+
+    Voxels where ``subject[mask_name]`` is non-zero keep their (normalized)
+    value; all other voxels are set to 0. Intended to run after intensity
+    normalization (see ``DataConfig.foreground_mask_name``).
+    """
+
+    def __init__(self, mask_name: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.mask_name = mask_name
+        self.args_names = ['mask_name']
+
+    def apply_transform(self, subject: tio.Subject) -> tio.Subject:
+        mask = subject[self.mask_name].data != 0
+        for image in subject.get_images(intensity_only=True):
+            image.set_data(image.data * mask)
+        return subject
+
+
 def get_preprocessing_transform() -> tio.Compose:
     """
     Build the preprocessing pipeline from ``DataConfig``.
-    Order: Resample -> CropOrPad -> Intensity Normalization.
+    Order: Resample -> CropOrPad -> Intensity Normalization -> Foreground masking.
     """
     dcfg: DataConfig = ConfigManager.get().get_config(ConfigManager.DATA)
     transforms = []
@@ -143,9 +190,11 @@ def get_preprocessing_transform() -> tio.Compose:
         transforms.append(tio.CropOrPad(dcfg.target_shape))
     if dcfg.normalization == 'znorm':
         transforms.append(tio.ZNormalization(
-            masking_method=None))
+            masking_method=dcfg.znorm_mask_name))
     elif dcfg.normalization == 'rescale':
         transforms.append(tio.RescaleIntensity(out_min_max=(0.0, 1.0)))
+    if dcfg.foreground_mask_name:
+        transforms.append(ZeroOutsideMask(dcfg.foreground_mask_name))
     return tio.Compose(transforms)
 
 
@@ -223,6 +272,7 @@ def create_labelmap_segmentation_datasets() -> Tuple[
 
     modalities = dcfg.modalities
     label_name = dcfg.label_name
+    mask_names = [dcfg.znorm_mask_name, dcfg.foreground_mask_name]
 
     preprocess = get_preprocessing_transform()
     augment = get_augmentation_transform()
@@ -232,17 +282,17 @@ def create_labelmap_segmentation_datasets() -> Tuple[
     return (
         tio.SubjectsDataset(
             build_labelmap_segmentation_subjects(
-                data_root / 'train', modalities, label_name),
+                data_root / 'train', modalities, label_name, mask_names=mask_names),
             transform=train_tf,
         ),
         tio.SubjectsDataset(
             build_labelmap_segmentation_subjects(
-                data_root / 'validation', modalities, label_name),
+                data_root / 'validation', modalities, label_name, mask_names=mask_names),
             transform=preprocess,
         ),
         tio.SubjectsDataset(
             build_labelmap_segmentation_subjects(data_root / 'test', modalities, label_name,
-                                                 require_label=True),
+                                                 require_label=True, mask_names=mask_names),
             transform=preprocess,
         ),
     )

@@ -77,6 +77,15 @@ def parse_args() -> argparse.Namespace:
                    default=None, metavar=('D', 'H', 'W'))
     g.add_argument('--normalization',  default='znorm',
                    choices=['znorm', 'rescale', 'none'])
+    g.add_argument('--znorm_mask_name', default=None,
+                   help='Labelmap folder whose non-zero voxels define the ZNorm mask '
+                        '(default: None = normalize over the whole volume; '
+                        'may equal --label_name to reuse the segmentation mask)')
+    g.add_argument('--foreground_mask_name', default=None,
+                   help='Labelmap folder whose non-zero voxels are kept after '
+                        'normalization, with all other voxels set to 0 '
+                        '(default: None = disabled; may equal --label_name or '
+                        '--znorm_mask_name to reuse that mask)')
 
     g = p.add_argument_group('Patch sampling')
     g.add_argument('--patch_based',        action='store_true')
@@ -174,6 +183,8 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
         args.target_spacing) if args.target_spacing else None
     dc.target_shape = tuple(args.target_shape) if args.target_shape else None
     dc.normalization = args.normalization
+    dc.znorm_mask_name = args.znorm_mask_name
+    dc.foreground_mask_name = args.foreground_mask_name
 
     pc = PatchConfig()
     pc.enabled = args.patch_based

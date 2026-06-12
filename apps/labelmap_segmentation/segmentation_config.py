@@ -30,6 +30,16 @@ class DataConfig(AbstractConfig):
         None,     doc='Resample spacing (x, y, z) in mm')
     target_shape = ConfigField(None,     doc='Crop/pad target shape (D, H, W)')
     normalization = ConfigField('znorm',  doc='znorm | rescale | none')
+    znorm_mask_name = ConfigField(
+        None, doc='Optional labelmap folder name; its non-zero voxels define the '
+                  'ZNormalization mask (None = normalize over the whole volume). '
+                  'May be set to the same value as label_name to reuse the '
+                  'segmentation mask.')
+    foreground_mask_name = ConfigField(
+        None, doc='Optional labelmap folder name; applied after normalization, '
+                  'intensity values are kept where this labelmap is non-zero and '
+                  'set to 0 elsewhere (None = disabled). May be set to the same '
+                  'value as label_name or znorm_mask_name to reuse that mask.')
 
 
 class PatchConfig(AbstractConfig):
