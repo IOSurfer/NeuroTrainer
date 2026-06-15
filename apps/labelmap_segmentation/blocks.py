@@ -1,6 +1,7 @@
 """
 Primitive 3D building blocks shared by the UNet3D encoder, decoder and heads.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -9,8 +10,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _GroupNorm(channels: int) -> nn.GroupNorm:
     """Largest power-of-2 group count that evenly divides *channels*, max 32."""
@@ -21,6 +22,7 @@ def _GroupNorm(channels: int) -> nn.GroupNorm:
 
 
 # ── Primitive blocks ───────────────────────────────────────────────────────────
+
 
 class DoubleConv(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, mid_ch: Optional[int] = None) -> None:
@@ -71,7 +73,9 @@ class Up(nn.Module):
         )
         return self.conv(torch.cat([x2, x1], dim=1))
 
+
 # ── EffiDec3D blocks ───────────────────────────────────────────────────────────
+
 
 class ChannelReductionResidualBlock(nn.Module):
 

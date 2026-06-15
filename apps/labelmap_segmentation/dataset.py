@@ -12,6 +12,7 @@ Expected directory layout:
     ├── validation/
     └── test/
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,12 +30,12 @@ from apps.labelmap_segmentation.segmentation_config import (
     TrainingConfig,
 )
 
-
 # ── File helpers ───────────────────────────────────────────────────────────────
+
 
 def _find_nifti(folder: Path) -> Optional[Path]:
     """Return the first NIfTI file in *folder* (.nii.gz preferred over .nii)."""
-    for pattern in ('*.nii.gz', '*.nii'):
+    for pattern in ("*.nii.gz", "*.nii"):
         hits = sorted(folder.glob(pattern))
         if hits:
             return hits[0]
@@ -60,6 +61,7 @@ def discover_modalities(split_dir: Path, label_name: str) -> List[str]:
 
 
 # ── Subject building ───────────────────────────────────────────────────────────
+
 
 def build_labelmap_segmentation_subjects(
     split_dir: Path,
@@ -90,31 +92,31 @@ def build_labelmap_segmentation_subjects(
     subjects: List[tio.Subject] = []
 
     if not split_dir.exists():
-        print(f'[dataset] Split directory not found: {split_dir}')
+        print(f"[dataset] Split directory not found: {split_dir}")
         return subjects
 
     extra_masks = [
-        name for name in dict.fromkeys(mask_names or [])
-        if name and name != label_name
+        name for name in dict.fromkeys(mask_names or []) if name and name != label_name
     ]
 
     for subj_dir in sorted(split_dir.iterdir()):
         if not subj_dir.is_dir():
             continue
 
-        kwargs: dict = {'subject_id': subj_dir.name}
+        kwargs: dict = {"subject_id": subj_dir.name}
         skip = False
 
         for mod in modalities:
             mod_dir = subj_dir / mod
             if not mod_dir.exists():
                 print(
-                    f'[dataset] Missing modality {mod!r} for {subj_dir.name} -- skipped')
+                    f"[dataset] Missing modality {mod!r} for {subj_dir.name} -- skipped"
+                )
                 skip = True
                 break
             nii = _find_nifti(mod_dir)
             if nii is None:
-                print(f'[dataset] No NIfTI in {mod_dir} -- skipped')
+                print(f"[dataset] No NIfTI in {mod_dir} -- skipped")
                 skip = True
                 break
 
@@ -131,8 +133,7 @@ def build_labelmap_segmentation_subjects(
                 label = tio.LabelMap(str(nii))
                 kwargs[label_name] = label
         elif require_label:
-            print(
-                f'[dataset] Missing label folder for {subj_dir.name} -- skipped')
+            print(f"[dataset] Missing label folder for {subj_dir.name} -- skipped")
             continue
 
         for mask_name in extra_masks:
@@ -140,7 +141,8 @@ def build_labelmap_segmentation_subjects(
             nii = _find_nifti(mask_dir) if mask_dir.exists() else None
             if nii is None:
                 print(
-                    f'[dataset] Missing mask {mask_name!r} for {subj_dir.name} -- skipped')
+                    f"[dataset] Missing mask {mask_name!r} for {subj_dir.name} -- skipped"
+                )
                 skip = True
                 break
             kwargs[mask_name] = tio.LabelMap(str(nii))
@@ -150,11 +152,12 @@ def build_labelmap_segmentation_subjects(
 
         subjects.append(tio.Subject(**kwargs))
 
-    print(f'[dataset] Loaded {len(subjects)} subjects from {split_dir}')
+    print(f"[dataset] Loaded {len(subjects)} subjects from {split_dir}")
     return subjects
 
 
 # ── Transforms ────────────────────────────────────────────────────────────────
+
 
 class ZeroOutsideMask(tio.Transform):
     """
@@ -168,7 +171,7 @@ class ZeroOutsideMask(tio.Transform):
     def __init__(self, mask_name: str, **kwargs) -> None:
         super().__init__(**kwargs)
         self.mask_name = mask_name
-        self.args_names = ['mask_name']
+        self.args_names = ["mask_name"]
 
     def apply_transform(self, subject: tio.Subject) -> tio.Subject:
         mask = subject[self.mask_name].data != 0
@@ -188,10 +191,9 @@ def get_preprocessing_transform() -> tio.Compose:
         transforms.append(tio.Resample(dcfg.target_spacing))
     if dcfg.target_shape is not None:
         transforms.append(tio.CropOrPad(dcfg.target_shape))
-    if dcfg.normalization == 'znorm':
-        transforms.append(tio.ZNormalization(
-            masking_method=dcfg.znorm_mask_name))
-    elif dcfg.normalization == 'rescale':
+    if dcfg.normalization == "znorm":
+        transforms.append(tio.ZNormalization(masking_method=dcfg.znorm_mask_name))
+    elif dcfg.normalization == "rescale":
         transforms.append(tio.RescaleIntensity(out_min_max=(0.0, 1.0)))
     if dcfg.foreground_mask_name:
         transforms.append(ZeroOutsideMask(dcfg.foreground_mask_name))
@@ -213,18 +215,22 @@ def get_augmentation_transform() -> tio.Compose:
     transforms = []
 
     if a.flip:
-        transforms.append(tio.RandomFlip(
-            axes=a.flip_axes,
-            flip_probability=a.flip_p,
-        ))
+        transforms.append(
+            tio.RandomFlip(
+                axes=a.flip_axes,
+                flip_probability=a.flip_p,
+            )
+        )
 
     if a.affine:
-        transforms.append(tio.RandomAffine(
-            scales=a.affine_scales,
-            degrees=a.affine_degrees,
-            translation=a.affine_translation,
-            p=a.affine_p,
-        ))
+        transforms.append(
+            tio.RandomAffine(
+                scales=a.affine_scales,
+                degrees=a.affine_degrees,
+                translation=a.affine_translation,
+                p=a.affine_p,
+            )
+        )
 
     if a.elastic:
         transforms.append(tio.RandomElasticDeformation(p=a.elastic_p))
@@ -236,17 +242,17 @@ def get_augmentation_transform() -> tio.Compose:
         transforms.append(tio.RandomBlur(std=a.blur_std, p=a.blur_p))
 
     if a.gamma:
-        transforms.append(tio.RandomGamma(
-            log_gamma=a.gamma_log_gamma, p=a.gamma_p))
+        transforms.append(tio.RandomGamma(log_gamma=a.gamma_log_gamma, p=a.gamma_p))
 
     return tio.Compose(transforms)
 
 
 # ── Dataset / DataLoader factory ───────────────────────────────────────────────
 
-def create_labelmap_segmentation_datasets() -> Tuple[
-    tio.SubjectsDataset, tio.SubjectsDataset, tio.SubjectsDataset
-]:
+
+def create_labelmap_segmentation_datasets() -> (
+    Tuple[tio.SubjectsDataset, tio.SubjectsDataset, tio.SubjectsDataset]
+):
     """
     Build ``(train_dataset, val_dataset, test_dataset)`` from the ConfigManager.
 
@@ -261,14 +267,13 @@ def create_labelmap_segmentation_datasets() -> Tuple[
     data_root = Path(dcfg.data_root)
 
     if dcfg.modalities is None:
-        dcfg.modalities = discover_modalities(
-            data_root / 'train', dcfg.label_name)
+        dcfg.modalities = discover_modalities(data_root / "train", dcfg.label_name)
         if not dcfg.modalities:
             raise RuntimeError(
                 f'Could not discover modalities under {data_root / "train"}. '
-                'Check data_root and label_name.'
+                "Check data_root and label_name."
             )
-        print(f'[dataset] Auto-discovered modalities: {dcfg.modalities}')
+        print(f"[dataset] Auto-discovered modalities: {dcfg.modalities}")
 
     modalities = dcfg.modalities
     label_name = dcfg.label_name
@@ -276,23 +281,29 @@ def create_labelmap_segmentation_datasets() -> Tuple[
 
     preprocess = get_preprocessing_transform()
     augment = get_augmentation_transform()
-    train_tf = tio.Compose([preprocess, augment]
-                           ) if acfg.enabled else preprocess
+    train_tf = tio.Compose([preprocess, augment]) if acfg.enabled else preprocess
 
     return (
         tio.SubjectsDataset(
             build_labelmap_segmentation_subjects(
-                data_root / 'train', modalities, label_name, mask_names=mask_names),
+                data_root / "train", modalities, label_name, mask_names=mask_names
+            ),
             transform=train_tf,
         ),
         tio.SubjectsDataset(
             build_labelmap_segmentation_subjects(
-                data_root / 'validation', modalities, label_name, mask_names=mask_names),
+                data_root / "validation", modalities, label_name, mask_names=mask_names
+            ),
             transform=preprocess,
         ),
         tio.SubjectsDataset(
-            build_labelmap_segmentation_subjects(data_root / 'test', modalities, label_name,
-                                                 require_label=True, mask_names=mask_names),
+            build_labelmap_segmentation_subjects(
+                data_root / "test",
+                modalities,
+                label_name,
+                require_label=True,
+                mask_names=mask_names,
+            ),
             transform=preprocess,
         ),
     )
@@ -300,7 +311,7 @@ def create_labelmap_segmentation_datasets() -> Tuple[
 
 def create_data_loaders(
     train_dataset: tio.SubjectsDataset,
-    val_dataset:   tio.SubjectsDataset,
+    val_dataset: tio.SubjectsDataset,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Return ``(train_loader, val_loader)``.
@@ -340,16 +351,30 @@ def create_data_loaders(
         )
         return (
             DataLoader(
-                train_q, batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size, num_workers=0),
+                train_q,
+                batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size,
+                num_workers=0,
+            ),
             DataLoader(
-                val_q,   batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size, num_workers=0),
+                val_q,
+                batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size,
+                num_workers=0,
+            ),
         )
 
     return (
-        DataLoader(train_dataset,
-                   batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size, shuffle=True,
-                   num_workers=icfg.num_workers, pin_memory=False),
-        DataLoader(val_dataset,
-                   batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size, shuffle=False,
-                   num_workers=icfg.num_workers, pin_memory=False),
+        DataLoader(
+            train_dataset,
+            batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size,
+            shuffle=True,
+            num_workers=icfg.num_workers,
+            pin_memory=False,
+        ),
+        DataLoader(
+            val_dataset,
+            batch_size=1 if tcfg.gradient_accumulation else tcfg.batch_size,
+            shuffle=False,
+            num_workers=icfg.num_workers,
+            pin_memory=False,
+        ),
     )

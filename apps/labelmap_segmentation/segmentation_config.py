@@ -13,48 +13,48 @@ UNet3DConfig (EncoderDecoderModelConfig)
 """
 
 from configuration.base import AbstractConfig, ConfigField
-from configuration.model.base import DecoderConfig, EncoderConfig, EncoderDecoderModelConfig
+from configuration.model.base import (
+    DecoderConfig,
+    EncoderConfig,
+    EncoderDecoderModelConfig,
+)
 
 
 class DataConfig(AbstractConfig):
-    config_type = 'Data'
+    config_type = "Data"
 
-    data_root = ConfigField(
-        '',       doc='Root dir with train/validation/test splits')
-    modalities = ConfigField(
-        None,     doc='Modality folder names (None = auto-detect)')
-    label_name = ConfigField('label',  doc='Segmentation mask folder name')
-    num_classes = ConfigField(
-        2,        doc='Output classes (background included)')
-    target_spacing = ConfigField(
-        None,     doc='Resample spacing (x, y, z) in mm')
-    target_shape = ConfigField(None,     doc='Crop/pad target shape (D, H, W)')
-    normalization = ConfigField('znorm',  doc='znorm | rescale | none')
+    data_root = ConfigField("", doc="Root dir with train/validation/test splits")
+    modalities = ConfigField(None, doc="Modality folder names (None = auto-detect)")
+    label_name = ConfigField("label", doc="Segmentation mask folder name")
+    num_classes = ConfigField(2, doc="Output classes (background included)")
+    target_spacing = ConfigField(None, doc="Resample spacing (x, y, z) in mm")
+    target_shape = ConfigField(None, doc="Crop/pad target shape (D, H, W)")
+    normalization = ConfigField("znorm", doc="znorm | rescale | none")
     znorm_mask_name = ConfigField(
-        None, doc='Optional labelmap folder name; its non-zero voxels define the '
-                  'ZNormalization mask (None = normalize over the whole volume). '
-                  'May be set to the same value as label_name to reuse the '
-                  'segmentation mask.')
+        None,
+        doc="Optional labelmap folder name; its non-zero voxels define the "
+        "ZNormalization mask (None = normalize over the whole volume). "
+        "May be set to the same value as label_name to reuse the "
+        "segmentation mask.",
+    )
     foreground_mask_name = ConfigField(
-        None, doc='Optional labelmap folder name; applied after normalization, '
-                  'intensity values are kept where this labelmap is non-zero and '
-                  'set to 0 elsewhere (None = disabled). May be set to the same '
-                  'value as label_name or znorm_mask_name to reuse that mask.')
+        None,
+        doc="Optional labelmap folder name; applied after normalization, "
+        "intensity values are kept where this labelmap is non-zero and "
+        "set to 0 elsewhere (None = disabled). May be set to the same "
+        "value as label_name or znorm_mask_name to reuse that mask.",
+    )
 
 
 class PatchConfig(AbstractConfig):
-    config_type = 'Patch'
+    config_type = "Patch"
 
-    enabled = ConfigField(False,          doc='Enable patch-based sampling')
-    size = ConfigField((128, 128, 128), doc='Patch size (D, H, W)')
-    overlap = ConfigField(
-        (64,  64,  64),  doc='GridSampler overlap (inference)')
-    samples_per_volume = ConfigField(
-        4,               doc='Patches per volume per queue epoch')
-    queue_max_length = ConfigField(
-        256,             doc='Max patches kept in the queue')
-    weighted_sampling = ConfigField(
-        False,           doc='Weight sampling by label density')
+    enabled = ConfigField(False, doc="Enable patch-based sampling")
+    size = ConfigField((128, 128, 128), doc="Patch size (D, H, W)")
+    overlap = ConfigField((64, 64, 64), doc="GridSampler overlap (inference)")
+    samples_per_volume = ConfigField(4, doc="Patches per volume per queue epoch")
+    queue_max_length = ConfigField(256, doc="Max patches kept in the queue")
+    weighted_sampling = ConfigField(False, doc="Weight sampling by label density")
 
 
 class AugmentConfig(AbstractConfig):
@@ -73,43 +73,41 @@ class AugmentConfig(AbstractConfig):
     <transform>_<param>  any   -- transform-specific parameter
     """
 
-    config_type = 'Augment'
+    config_type = "Augment"
 
     # Master switch -- overrides all individual toggles when False
-    enabled = ConfigField(
-        True, doc='Global switch; False disables all augmentation')
+    enabled = ConfigField(True, doc="Global switch; False disables all augmentation")
 
     # ── Random Flip ───────────────────────────────────────────────────────────
-    flip = ConfigField(False,      doc='Enable random axis flipping')
-    flip_axes = ConfigField((0, 1, 2), doc='Axes to consider for flipping')
-    flip_p = ConfigField(0.3,       doc='Per-axis flip probability')
+    flip = ConfigField(False, doc="Enable random axis flipping")
+    flip_axes = ConfigField((0, 1, 2), doc="Axes to consider for flipping")
+    flip_p = ConfigField(0.3, doc="Per-axis flip probability")
 
     # ── Random Affine ─────────────────────────────────────────────────────────
-    affine = ConfigField(False,       doc='Enable random affine transform')
-    affine_p = ConfigField(0.3,        doc='Apply probability')
-    affine_scales = ConfigField((1.0, 1.0), doc='Scale range (min, max)')
-    affine_degrees = ConfigField(15,          doc='Max rotation in degrees')
-    affine_translation = ConfigField(10,          doc='Max translation in mm')
+    affine = ConfigField(False, doc="Enable random affine transform")
+    affine_p = ConfigField(0.3, doc="Apply probability")
+    affine_scales = ConfigField((1.0, 1.0), doc="Scale range (min, max)")
+    affine_degrees = ConfigField(15, doc="Max rotation in degrees")
+    affine_translation = ConfigField(10, doc="Max translation in mm")
 
     # ── Random Elastic Deformation ────────────────────────────────────────────
-    elastic = ConfigField(True, doc='Enable random elastic deformation')
-    elastic_p = ConfigField(0.3,   doc='Apply probability')
+    elastic = ConfigField(True, doc="Enable random elastic deformation")
+    elastic_p = ConfigField(0.3, doc="Apply probability")
 
     # ── Random Noise ──────────────────────────────────────────────────────────
-    noise = ConfigField(True,       doc='Enable additive Gaussian noise')
-    noise_p = ConfigField(0.3,        doc='Apply probability')
-    noise_std = ConfigField((0.0, 0.1), doc='Noise std range (min, max)')
+    noise = ConfigField(True, doc="Enable additive Gaussian noise")
+    noise_p = ConfigField(0.3, doc="Apply probability")
+    noise_std = ConfigField((0.0, 0.1), doc="Noise std range (min, max)")
 
     # ── Random Blur ───────────────────────────────────────────────────────────
-    blur = ConfigField(False,       doc='Enable random Gaussian blur')
-    blur_p = ConfigField(0.3,        doc='Apply probability')
-    blur_std = ConfigField((0.0, 1.0), doc='Blur std range (min, max)')
+    blur = ConfigField(False, doc="Enable random Gaussian blur")
+    blur_p = ConfigField(0.3, doc="Apply probability")
+    blur_std = ConfigField((0.0, 1.0), doc="Blur std range (min, max)")
 
     # ── Random Gamma ──────────────────────────────────────────────────────────
-    gamma = ConfigField(True,        doc='Enable random gamma correction')
-    gamma_p = ConfigField(0.3,         doc='Apply probability')
-    gamma_log_gamma = ConfigField(
-        (-0.3, 0.3), doc='Log-gamma range (min, max)')
+    gamma = ConfigField(True, doc="Enable random gamma correction")
+    gamma_p = ConfigField(0.3, doc="Apply probability")
+    gamma_log_gamma = ConfigField((-0.3, 0.3), doc="Log-gamma range (min, max)")
 
 
 class UNet3DEncoderConfig(EncoderConfig):
@@ -122,7 +120,7 @@ class UNet3DEncoderConfig(EncoderConfig):
         depth         -- number of encoding / downsampling levels
     """
 
-    config_type = 'UNet3DEncoder'
+    config_type = "UNet3DEncoder"
 
 
 class UNet3DDecoderConfig(DecoderConfig):
@@ -133,7 +131,7 @@ class UNet3DDecoderConfig(DecoderConfig):
         trilinear -- True = trilinear upsampling, False = transposed conv
     """
 
-    config_type = 'UNet3DDecoder'
+    config_type = "UNet3DDecoder"
 
 
 class UNet3DConfig(EncoderDecoderModelConfig):
@@ -152,12 +150,13 @@ class UNet3DConfig(EncoderDecoderModelConfig):
         cfg.num_supervision_levels     = 1    # >1 enables deep supervision
     """
 
-    config_type = 'Model'
+    config_type = "Model"
 
     num_supervision_levels = ConfigField(
-        1, doc='1 = single output; >1 = deep supervision with auxiliary heads')
+        1, doc="1 = single output; >1 = deep supervision with auxiliary heads"
+    )
 
-    def __init__(self, file_path: str = '') -> None:
+    def __init__(self, file_path: str = "") -> None:
         super().__init__(
             encoder=UNet3DEncoderConfig(),
             decoder=UNet3DDecoderConfig(),
@@ -166,59 +165,59 @@ class UNet3DConfig(EncoderDecoderModelConfig):
 
 
 class LossConfig(AbstractConfig):
-    config_type = 'Loss'
+    config_type = "Loss"
 
-    type = ConfigField('dice_ce', doc='dice | dice_ce | ce')
-    dice_weight = ConfigField(
-        0.5,       doc='Dice term weight in combined loss')
-    ce_weight = ConfigField(0.5,       doc='Cross-entropy term weight')
+    type = ConfigField("dice_ce", doc="dice | dice_ce | ce")
+    dice_weight = ConfigField(0.5, doc="Dice term weight in combined loss")
+    ce_weight = ConfigField(0.5, doc="Cross-entropy term weight")
 
 
 class OptimizerConfig(AbstractConfig):
-    config_type = 'Optimizer'
+    config_type = "Optimizer"
 
-    type = ConfigField('adamw', doc='adam | adamw | muon | sgd')
-    lr = ConfigField(1e-4,    doc='Peak learning rate')
+    type = ConfigField("adamw", doc="adam | adamw | muon | sgd")
+    lr = ConfigField(1e-4, doc="Peak learning rate")
     weight_decay = ConfigField(1e-5)
-    grad_clip = ConfigField(1.0,     doc='Max gradient L2-norm (0 = disabled)')
+    grad_clip = ConfigField(1.0, doc="Max gradient L2-norm (0 = disabled)")
 
 
 class SchedulerConfig(AbstractConfig):
-    config_type = 'Scheduler'
+    config_type = "Scheduler"
 
-    type = ConfigField('cosine', doc='cosine | plateau | step | none')
-    warmup_epochs = ConfigField(30,       doc='Linear LR warm-up epochs')
-    patience = ConfigField(
-        10,       doc='ReduceLROnPlateau patience / StepLR step')
-    factor = ConfigField(0.5,      doc='LR decay multiplier')
+    type = ConfigField("cosine", doc="cosine | plateau | step | none")
+    warmup_epochs = ConfigField(30, doc="Linear LR warm-up epochs")
+    patience = ConfigField(10, doc="ReduceLROnPlateau patience / StepLR step")
+    factor = ConfigField(0.5, doc="LR decay multiplier")
 
 
 class TrainingConfig(AbstractConfig):
-    config_type = 'Training'
+    config_type = "Training"
 
     epochs = ConfigField(200)
     batch_size = ConfigField(2)
     gradient_accumulation = ConfigField(True)
-    amp = ConfigField(False, doc='Automatic mixed precision (CUDA only)')
+    amp = ConfigField(False, doc="Automatic mixed precision (CUDA only)")
     early_stopping = ConfigField(False)
     early_stopping_patience = ConfigField(30)
-    ema = ConfigField(False,  doc='Exponential moving average of model weights')
-    ema_decay = ConfigField(0.99, doc='EMA decay (closer to 1 = slower shadow update)')
+    ema = ConfigField(False, doc="Exponential moving average of model weights")
+    ema_decay = ConfigField(0.99, doc="EMA decay (closer to 1 = slower shadow update)")
 
 
 class InfraConfig(AbstractConfig):
-    config_type = 'Infra'
+    config_type = "Infra"
 
-    output_dir = ConfigField('./output')
-    experiment_name = ConfigField('labelmap_seg')
+    output_dir = ConfigField("./output")
+    experiment_name = ConfigField("labelmap_seg")
     num_workers = ConfigField(4)
-    device = ConfigField('auto',  doc='auto | cpu | cuda')
+    device = ConfigField("auto", doc="auto | cpu | cuda")
     seed = ConfigField(42)
-    resume = ConfigField(None,    doc='Checkpoint file path to resume from')
+    resume = ConfigField(None, doc="Checkpoint file path to resume from")
     val_interval = ConfigField(1)
     save_interval = ConfigField(10)
     log_interval = ConfigField(10)
     log_images = ConfigField(False)
     log_images_interval = ConfigField(10)
     torch_compile = ConfigField(
-        False, doc='torch.compile(model, dynamic=False) for faster training (PyTorch >= 2.0)')
+        False,
+        doc="torch.compile(model, dynamic=False) for faster training (PyTorch >= 2.0)",
+    )

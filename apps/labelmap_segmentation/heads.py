@@ -5,6 +5,7 @@ TrainHead : decoder features -> List[logits per supervision level]
 EvalHead  : main logits -> (labelmap, normalized-entropy uncertainty)
 InferHead : main logits -> labelmap (argmax only, deployment fast path)
 """
+
 from __future__ import annotations
 
 import math

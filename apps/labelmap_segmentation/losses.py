@@ -8,7 +8,9 @@ import torch.nn.functional as F
 class DiceLoss(nn.Module):
     """Soft Dice loss, optionally ignoring the background class."""
 
-    def __init__(self, num_classes: int, smooth: float = 1e-5, ignore_background: bool = True):
+    def __init__(
+        self, num_classes: int, smooth: float = 1e-5, ignore_background: bool = True
+    ):
         super().__init__()
         self.num_classes = num_classes
         self.smooth = smooth
@@ -23,20 +25,23 @@ class DiceLoss(nn.Module):
             probs = torch.sigmoid(logits)
             t = targets.float()
             inter = (probs * t).sum()
-            return 1.0 - (2.0 * inter + self.smooth) / (probs.sum() + t.sum() + self.smooth)
+            return 1.0 - (2.0 * inter + self.smooth) / (
+                probs.sum() + t.sum() + self.smooth
+            )
 
         probs = F.softmax(logits, dim=1)
         t_long = targets.squeeze(1).long()
-        t_oh = F.one_hot(t_long, self.num_classes).permute(
-            0, 4, 1, 2, 3).float()
+        t_oh = F.one_hot(t_long, self.num_classes).permute(0, 4, 1, 2, 3).float()
 
         start = 1 if self.ignore_background else 0
         dice_losses = []
         for c in range(start, self.num_classes):
             p_c, t_c = probs[:, c], t_oh[:, c]
             inter = (p_c * t_c).sum()
-            dice_losses.append(1.0 - (2.0 * inter + self.smooth) /
-                               (p_c.sum() + t_c.sum() + self.smooth))
+            dice_losses.append(
+                1.0
+                - (2.0 * inter + self.smooth) / (p_c.sum() + t_c.sum() + self.smooth)
+            )
 
         return torch.stack(dice_losses).mean()
 
@@ -67,8 +72,10 @@ class DiceCELoss(nn.Module):
         Both component tensors are detached scalars suitable for logging.
         """
         loss_dice = self.dice(logits, targets)
-        loss_ce = (self.ce(logits, targets.float())
-                   if self.num_classes == 1
-                   else self.ce(logits, targets.squeeze(1).long()))
+        loss_ce = (
+            self.ce(logits, targets.float())
+            if self.num_classes == 1
+            else self.ce(logits, targets.squeeze(1).long())
+        )
         total = self.dice_weight * loss_dice + self.ce_weight * loss_ce
-        return total, {'dice': loss_dice.detach(), 'ce': loss_ce.detach()}
+        return total, {"dice": loss_dice.detach(), "ce": loss_ce.detach()}

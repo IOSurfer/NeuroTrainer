@@ -4,6 +4,7 @@ UNet3D encoder and bottleneck.
 UNet3DEncoder    : input -> (e1, e2, e3, e4)  finest -> coarsest
 UNet3DBottleneck : e4 -> b                     bridge to the decoder
 """
+
 from __future__ import annotations
 
 from typing import Tuple

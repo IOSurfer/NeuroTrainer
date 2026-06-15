@@ -39,14 +39,14 @@ def compute_sdf_metrics(
     total_mse = 0.0
 
     for i in range(num_fields):
-        diff = pred[:, i] - target[:, i]                    # [B, D, H, W]
+        diff = pred[:, i] - target[:, i]  # [B, D, H, W]
         mae = diff.abs().mean().item()
-        mse = (diff ** 2).mean().item()
-        scores[f'mae_field_{i}'] = mae
-        scores[f'mse_field_{i}'] = mse
+        mse = (diff**2).mean().item()
+        scores[f"mae_field_{i}"] = mae
+        scores[f"mse_field_{i}"] = mse
         total_mae += mae
         total_mse += mse
 
-    scores['mean_mae'] = total_mae / num_fields
-    scores['mean_mse'] = total_mse / num_fields
+    scores["mean_mae"] = total_mae / num_fields
+    scores["mean_mse"] = total_mse / num_fields
     return scores

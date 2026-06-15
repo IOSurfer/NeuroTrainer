@@ -18,6 +18,7 @@ Access from anywhere:
 Persist at experiment start:
     ConfigManager.get().save_all('output/exp_001')
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,24 +36,24 @@ class ConfigManager:
     also use their own arbitrary string keys.
     """
 
-    _instance: Optional['ConfigManager'] = None
+    _instance: Optional["ConfigManager"] = None
 
     # Well-known type-name constants (plain strings -- not tied to any class)
-    DATA = 'Data'
-    AUGMENT = 'Augment'
-    PATCH = 'Patch'
-    MODEL = 'Model'
-    LOSS = 'Loss'
-    OPTIMIZER = 'Optimizer'
-    SCHEDULER = 'Scheduler'
-    TRAINING = 'Training'
-    INFRA = 'Infra'
+    DATA = "Data"
+    AUGMENT = "Augment"
+    PATCH = "Patch"
+    MODEL = "Model"
+    LOSS = "Loss"
+    OPTIMIZER = "Optimizer"
+    SCHEDULER = "Scheduler"
+    TRAINING = "Training"
+    INFRA = "Infra"
 
     def __init__(self) -> None:
-        self._registry: Dict[str, 'AbstractConfig'] = {}
+        self._registry: Dict[str, "AbstractConfig"] = {}
 
     @classmethod
-    def get(cls) -> 'ConfigManager':
+    def get(cls) -> "ConfigManager":
         """Return the global singleton, creating it if needed."""
         if cls._instance is None:
             cls._instance = cls()
@@ -65,7 +66,7 @@ class ConfigManager:
 
     # ── Registration ──────────────────────────────────────────────────────────
 
-    def register(self, type_name: str, config: 'AbstractConfig') -> 'ConfigManager':
+    def register(self, type_name: str, config: "AbstractConfig") -> "ConfigManager":
         """
         Register *config* under *type_name*.  Chaining is supported:
             manager.register('Data', dc).register('Model', mc)
@@ -73,7 +74,7 @@ class ConfigManager:
         self._registry[type_name] = config
         return self
 
-    def get_config(self, type_name: str) -> Optional['AbstractConfig']:
+    def get_config(self, type_name: str) -> Optional["AbstractConfig"]:
         """Return the registered config for *type_name*, or ``None``."""
         return self._registry.get(type_name)
 
@@ -88,7 +89,7 @@ class ConfigManager:
         dir_path = Path(directory)
         dir_path.mkdir(parents=True, exist_ok=True)
         for type_name, config in self._registry.items():
-            config.save(str(dir_path / f'{type_name.lower()}.json'))
+            config.save(str(dir_path / f"{type_name.lower()}.json"))
 
     def load_all(self, directory: str) -> None:
         """
@@ -97,7 +98,7 @@ class ConfigManager:
         """
         dir_path = Path(directory)
         for type_name, config in self._registry.items():
-            path = dir_path / f'{type_name.lower()}.json'
+            path = dir_path / f"{type_name.lower()}.json"
             if path.exists():
                 config.load(str(path))
 
@@ -106,15 +107,15 @@ class ConfigManager:
     def print_all(self) -> None:
         """Print a formatted summary of all registered configs to stdout."""
         width = 64
-        thick = '═' * width
-        print(f'╔{thick}╗')
+        thick = "═" * width
+        print(f"╔{thick}╗")
         print(f'║{"  ConfigManager":^{width}}║')
-        print(f'╚{thick}╝')
+        print(f"╚{thick}╝")
         for type_name, config in self._registry.items():
-            print(f'\n  ▶ {type_name}')
+            print(f"\n  ▶ {type_name}")
             for line in config.summary().splitlines():
-                print(f'    {line}')
+                print(f"    {line}")
         print()
 
     def __repr__(self) -> str:
-        return f'ConfigManager(registered={list(self._registry)})'
+        return f"ConfigManager(registered={list(self._registry)})"

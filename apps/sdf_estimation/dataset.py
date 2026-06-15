@@ -19,6 +19,7 @@ SDF fields are loaded as :class:`tio.ScalarImage` with float32 data and are
 Blur, Gamma).  Spatial augmentations (Flip, Affine, Elastic) apply to all
 images (modalities + SDF fields).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,12 +36,12 @@ from apps.sdf_estimation.sdf_config import (
     TrainingConfig,
 )
 
-
 # ── File helpers ───────────────────────────────────────────────────────────────
+
 
 def _find_nifti(folder: Path) -> Optional[Path]:
     """Return the first NIfTI file in *folder* (.nii.gz preferred over .nii)."""
-    for pattern in ('*.nii.gz', '*.nii'):
+    for pattern in ("*.nii.gz", "*.nii"):
         hits = sorted(folder.glob(pattern))
         if hits:
             return hits[0]
@@ -48,6 +49,7 @@ def _find_nifti(folder: Path) -> Optional[Path]:
 
 
 # ── Discovery helpers ──────────────────────────────────────────────────────────
+
 
 def discover_modalities(split_dir: Path, exclude: List[str]) -> List[str]:
     """
@@ -72,6 +74,7 @@ def discover_modalities(split_dir: Path, exclude: List[str]) -> List[str]:
 
 # ── Subject building ───────────────────────────────────────────────────────────
 
+
 def build_sdf_subjects(
     split_dir: Path,
     modalities: List[str],
@@ -91,26 +94,28 @@ def build_sdf_subjects(
     subjects: List[tio.Subject] = []
 
     if not split_dir.exists():
-        print(f'[dataset] Split directory not found: {split_dir}')
+        print(f"[dataset] Split directory not found: {split_dir}")
         return subjects
 
     for subj_dir in sorted(split_dir.iterdir()):
         if not subj_dir.is_dir():
             continue
 
-        kwargs: dict = {'subject_id': subj_dir.name}
+        kwargs: dict = {"subject_id": subj_dir.name}
         skip = False
 
         # ── Input modalities ───────────────────────────────────────────────
         for mod in modalities:
             mod_dir = subj_dir / mod
             if not mod_dir.exists():
-                print(f'[dataset] Missing modality {mod!r} for {subj_dir.name} -- skipped')
+                print(
+                    f"[dataset] Missing modality {mod!r} for {subj_dir.name} -- skipped"
+                )
                 skip = True
                 break
             nii = _find_nifti(mod_dir)
             if nii is None:
-                print(f'[dataset] No NIfTI in {mod_dir} -- skipped')
+                print(f"[dataset] No NIfTI in {mod_dir} -- skipped")
                 skip = True
                 break
 
@@ -125,14 +130,16 @@ def build_sdf_subjects(
             sdf_dir = subj_dir / sdf
             if not sdf_dir.exists():
                 if require_sdf:
-                    print(f'[dataset] Missing SDF folder {sdf!r} for {subj_dir.name} -- skipped')
+                    print(
+                        f"[dataset] Missing SDF folder {sdf!r} for {subj_dir.name} -- skipped"
+                    )
                     skip = True
                     break
                 continue
             nii = _find_nifti(sdf_dir)
             if nii is None:
                 if require_sdf:
-                    print(f'[dataset] No NIfTI in {sdf_dir} -- skipped')
+                    print(f"[dataset] No NIfTI in {sdf_dir} -- skipped")
                     skip = True
                     break
                 continue
@@ -145,11 +152,12 @@ def build_sdf_subjects(
 
         subjects.append(tio.Subject(**kwargs))
 
-    print(f'[dataset] Loaded {len(subjects)} subjects from {split_dir}')
+    print(f"[dataset] Loaded {len(subjects)} subjects from {split_dir}")
     return subjects
 
 
 # ── Transforms ────────────────────────────────────────────────────────────────
+
 
 def get_preprocessing_transform(modalities: List[str]) -> tio.Compose:
     """
@@ -164,16 +172,20 @@ def get_preprocessing_transform(modalities: List[str]) -> tio.Compose:
         transforms.append(tio.Resample(dcfg.target_spacing))
     if dcfg.target_shape is not None:
         transforms.append(tio.CropOrPad(dcfg.target_shape))
-    if dcfg.normalization == 'znorm':
-        transforms.append(tio.ZNormalization(
-            masking_method=None,
-            include=list(modalities),
-        ))
-    elif dcfg.normalization == 'rescale':
-        transforms.append(tio.RescaleIntensity(
-            out_min_max=(0.0, 1.0),
-            include=list(modalities),
-        ))
+    if dcfg.normalization == "znorm":
+        transforms.append(
+            tio.ZNormalization(
+                masking_method=None,
+                include=list(modalities),
+            )
+        )
+    elif dcfg.normalization == "rescale":
+        transforms.append(
+            tio.RescaleIntensity(
+                out_min_max=(0.0, 1.0),
+                include=list(modalities),
+            )
+        )
     return tio.Compose(transforms)
 
 
@@ -197,52 +209,63 @@ def get_augmentation_transform(modalities: List[str]) -> tio.Compose:
 
     # ── Spatial (all images including SDF fields) ──────────────────────────
     if a.flip:
-        transforms.append(tio.RandomFlip(
-            axes=a.flip_axes,
-            flip_probability=a.flip_p,
-        ))
+        transforms.append(
+            tio.RandomFlip(
+                axes=a.flip_axes,
+                flip_probability=a.flip_p,
+            )
+        )
 
     if a.affine:
-        transforms.append(tio.RandomAffine(
-            scales=a.affine_scales,
-            degrees=a.affine_degrees,
-            translation=a.affine_translation,
-            p=a.affine_p,
-        ))
+        transforms.append(
+            tio.RandomAffine(
+                scales=a.affine_scales,
+                degrees=a.affine_degrees,
+                translation=a.affine_translation,
+                p=a.affine_p,
+            )
+        )
 
     if a.elastic:
         transforms.append(tio.RandomElasticDeformation(p=a.elastic_p))
 
     # ── Intensity (modalities only -- SDF fields excluded) ─────────────────
     if a.noise:
-        transforms.append(tio.RandomNoise(
-            std=a.noise_std,
-            p=a.noise_p,
-            include=list(modalities),
-        ))
+        transforms.append(
+            tio.RandomNoise(
+                std=a.noise_std,
+                p=a.noise_p,
+                include=list(modalities),
+            )
+        )
 
     if a.blur:
-        transforms.append(tio.RandomBlur(
-            std=a.blur_std,
-            p=a.blur_p,
-            include=list(modalities),
-        ))
+        transforms.append(
+            tio.RandomBlur(
+                std=a.blur_std,
+                p=a.blur_p,
+                include=list(modalities),
+            )
+        )
 
     if a.gamma:
-        transforms.append(tio.RandomGamma(
-            log_gamma=a.gamma_log_gamma,
-            p=a.gamma_p,
-            include=list(modalities),
-        ))
+        transforms.append(
+            tio.RandomGamma(
+                log_gamma=a.gamma_log_gamma,
+                p=a.gamma_p,
+                include=list(modalities),
+            )
+        )
 
     return tio.Compose(transforms)
 
 
 # ── Dataset / DataLoader factory ───────────────────────────────────────────────
 
-def create_sdf_datasets() -> Tuple[
-    tio.SubjectsDataset, tio.SubjectsDataset, tio.SubjectsDataset
-]:
+
+def create_sdf_datasets() -> (
+    Tuple[tio.SubjectsDataset, tio.SubjectsDataset, tio.SubjectsDataset]
+):
     """
     Build ``(train_dataset, val_dataset, test_dataset)`` from the ConfigManager.
 
@@ -258,7 +281,7 @@ def create_sdf_datasets() -> Tuple[
 
     if not dcfg.sdf_names:
         raise RuntimeError(
-            'DataConfig.sdf_names must be set explicitly before building datasets. '
+            "DataConfig.sdf_names must be set explicitly before building datasets. "
             'Example: sdf_names = ["sdf_bone", "sdf_muscle"]'
         )
 
@@ -266,14 +289,13 @@ def create_sdf_datasets() -> Tuple[
     sdf_names: List[str] = list(dcfg.sdf_names)
 
     if dcfg.modalities is None:
-        dcfg.modalities = discover_modalities(
-            data_root / 'train', exclude=sdf_names)
+        dcfg.modalities = discover_modalities(data_root / "train", exclude=sdf_names)
         if not dcfg.modalities:
             raise RuntimeError(
                 f'Could not discover modalities under {data_root / "train"}. '
-                'Check data_root and ensure modality folders are present.'
+                "Check data_root and ensure modality folders are present."
             )
-        print(f'[dataset] Auto-discovered modalities: {dcfg.modalities}')
+        print(f"[dataset] Auto-discovered modalities: {dcfg.modalities}")
 
     # Resolve num_sdf_fields from sdf_names and write back to config
     dcfg.num_sdf_fields = len(sdf_names)
@@ -286,16 +308,17 @@ def create_sdf_datasets() -> Tuple[
 
     return (
         tio.SubjectsDataset(
-            build_sdf_subjects(data_root / 'train', modalities, sdf_names),
+            build_sdf_subjects(data_root / "train", modalities, sdf_names),
             transform=train_tf,
         ),
         tio.SubjectsDataset(
-            build_sdf_subjects(data_root / 'validation', modalities, sdf_names),
+            build_sdf_subjects(data_root / "validation", modalities, sdf_names),
             transform=preprocess,
         ),
         tio.SubjectsDataset(
-            build_sdf_subjects(data_root / 'test', modalities, sdf_names,
-                               require_sdf=True),
+            build_sdf_subjects(
+                data_root / "test", modalities, sdf_names, require_sdf=True
+            ),
             transform=preprocess,
         ),
     )
@@ -319,8 +342,18 @@ def create_data_loaders(
     bs = 1 if tcfg.gradient_accumulation else tcfg.batch_size
 
     return (
-        DataLoader(train_dataset, batch_size=bs, shuffle=True,
-                   num_workers=icfg.num_workers, pin_memory=False),
-        DataLoader(val_dataset,   batch_size=bs, shuffle=False,
-                   num_workers=icfg.num_workers, pin_memory=False),
+        DataLoader(
+            train_dataset,
+            batch_size=bs,
+            shuffle=True,
+            num_workers=icfg.num_workers,
+            pin_memory=False,
+        ),
+        DataLoader(
+            val_dataset,
+            batch_size=bs,
+            shuffle=False,
+            num_workers=icfg.num_workers,
+            pin_memory=False,
+        ),
     )

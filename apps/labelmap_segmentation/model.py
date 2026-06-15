@@ -18,6 +18,7 @@ forward_train(x)   -> List[Tensor]      logits per supervision level (finest fir
 forward_eval(x)    -> (Tensor, Tensor)  labelmap [B,D,H,W] uint8, uncertainty [B,D,H,W] float32
 forward_infer(x)   -> Tensor            argmax labelmap [B, D, H, W]  uint8
 """
+
 from __future__ import annotations
 
 from typing import List, Tuple

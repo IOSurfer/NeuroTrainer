@@ -15,6 +15,7 @@ Declare parameters as class-level descriptors:
         lr     = ConfigField(1e-4,  doc='Learning rate')
         epochs = ConfigField(200)
 """
+
 from __future__ import annotations
 
 import copy
@@ -23,11 +24,11 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-
-_MISSING = object()   # sentinel meaning "key not present"
+_MISSING = object()  # sentinel meaning "key not present"
 
 
 # ── Field descriptor ───────────────────────────────────────────────────────────
+
 
 class ConfigField:
     """
@@ -37,27 +38,28 @@ class ConfigField:
     store so that changes are automatically notified and persisted.
     """
 
-    def __init__(self, default: Any = None, *, doc: str = '') -> None:
+    def __init__(self, default: Any = None, *, doc: str = "") -> None:
         self.default = default
         self.doc = doc
-        self.name = ''        # populated by __set_name__
+        self.name = ""  # populated by __set_name__
 
     def __set_name__(self, owner: type, name: str) -> None:
         self.name = name
 
-    def __get__(self, obj: 'AbstractConfig', objtype=None) -> Any:
+    def __get__(self, obj: "AbstractConfig", objtype=None) -> Any:
         if obj is None:
             return self
         return obj._get(self.name, self.default)
 
-    def __set__(self, obj: 'AbstractConfig', value: Any) -> None:
+    def __set__(self, obj: "AbstractConfig", value: Any) -> None:
         obj._set(self.name, value)
 
     def __repr__(self) -> str:
-        return f'ConfigField(default={self.default!r}, name={self.name!r})'
+        return f"ConfigField(default={self.default!r}, name={self.name!r})"
 
 
 # ── Abstract base ──────────────────────────────────────────────────────────────
+
 
 class AbstractConfig:
     """
@@ -77,13 +79,12 @@ class AbstractConfig:
     in :meth:`to_dict` / :meth:`from_dict` under ``__<name>__`` keys.
     """
 
-    config_type: str = ''
+    config_type: str = ""
 
-    def __init__(self, file_path: str = '') -> None:
-        self._file_path: Optional[Path] = Path(
-            file_path) if file_path else None
-        self._group = 'default'
-        self._props: Dict[str, Dict[str, Any]] = {'default': {}}
+    def __init__(self, file_path: str = "") -> None:
+        self._file_path: Optional[Path] = Path(file_path) if file_path else None
+        self._group = "default"
+        self._props: Dict[str, Dict[str, Any]] = {"default": {}}
         self._lock = threading.Lock()
         self._batch = False
         self._cbs: List[Callable[[str, str, Any], None]] = []
@@ -102,7 +103,7 @@ class AbstractConfig:
                         val = attr_val.default
                         if isinstance(val, (list, dict)):
                             val = copy.deepcopy(val)
-                        self._props['default'][key] = val
+                        self._props["default"][key] = val
 
     # ── Group management ────────────────────────────────────────────────────
 
@@ -133,9 +134,8 @@ class AbstractConfig:
     def get_value(self, path: str, default: Any = None) -> Any:
         """Read by dot-path, e.g. ``'optimizer.lr'``."""
         with self._lock:
-            parts = path.split('.')
-            node: Any = self._props.get(
-                self._group, {}).get(parts[0], _MISSING)
+            parts = path.split(".")
+            node: Any = self._props.get(self._group, {}).get(parts[0], _MISSING)
             if node is _MISSING:
                 return default
             for part in parts[1:]:
@@ -149,7 +149,7 @@ class AbstractConfig:
     def set_value(self, path: str, value: Any) -> None:
         """Write by dot-path, e.g. ``'optimizer.lr'``."""
         with self._lock:
-            parts = path.split('.')
+            parts = path.split(".")
             group = self._props.setdefault(self._group, {})
             if len(parts) == 1:
                 group[parts[0]] = value
@@ -197,7 +197,7 @@ class AbstractConfig:
 
     # ── Sub-config composition ───────────────────────────────────────────────
 
-    def sub_configs(self) -> Dict[str, 'AbstractConfig']:
+    def sub_configs(self) -> Dict[str, "AbstractConfig"]:
         """
         Return named child :class:`AbstractConfig` instances.
 
@@ -214,7 +214,9 @@ class AbstractConfig:
         names: set = set()
         for cls in type(self).__mro__:
             for attr_val in vars(cls).values():
-                if isinstance(attr_val, ConfigField) and isinstance(attr_val.default, tuple):
+                if isinstance(attr_val, ConfigField) and isinstance(
+                    attr_val.default, tuple
+                ):
                     names.add(attr_val.name)
         return names
 
@@ -228,13 +230,12 @@ class AbstractConfig:
         with self._lock:
             result: dict = {
                 group: {
-                    k: list(v) if isinstance(v, tuple) else v
-                    for k, v in props.items()
+                    k: list(v) if isinstance(v, tuple) else v for k, v in props.items()
                 }
                 for group, props in self._props.items()
             }
         for name, child in self.sub_configs().items():
-            result[f'__{name}__'] = child.to_dict()
+            result[f"__{name}__"] = child.to_dict()
         return result
 
     def from_dict(self, data: dict) -> None:
@@ -243,7 +244,7 @@ class AbstractConfig:
         sub = self.sub_configs()
         with self._lock:
             for group, props in data.items():
-                if group.startswith('__') and group.endswith('__'):
+                if group.startswith("__") and group.endswith("__"):
                     name = group[2:-2]
                     if name in sub:
                         sub[name].from_dict(props)
@@ -263,7 +264,7 @@ class AbstractConfig:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(
                 json.dumps(self.to_dict(), indent=2, ensure_ascii=False),
-                encoding='utf-8',
+                encoding="utf-8",
             )
             return True
         except OSError:
@@ -275,7 +276,7 @@ class AbstractConfig:
         if target is None or not target.exists():
             return False
         try:
-            self.from_dict(json.loads(target.read_text(encoding='utf-8')))
+            self.from_dict(json.loads(target.read_text(encoding="utf-8")))
             return True
         except (OSError, json.JSONDecodeError):
             return False
@@ -284,8 +285,8 @@ class AbstractConfig:
 
     def summary(self, _indent: int = 0) -> str:
         """Return a formatted, indented summary of all fields."""
-        pad = '  ' * _indent
-        lines = [f'{pad}[{type(self).__name__}]  type={self.config_type!r}']
+        pad = "  " * _indent
+        lines = [f"{pad}[{type(self).__name__}]  type={self.config_type!r}"]
         with self._lock:
             for group, props in self._props.items():
                 if not props:
@@ -293,13 +294,13 @@ class AbstractConfig:
                 for k, v in props.items():
                     val_str = repr(v)
                     if len(val_str) > 52:
-                        val_str = val_str[:49] + '...'
-                    lines.append(f'{pad}  {k:<28} {val_str}')
+                        val_str = val_str[:49] + "..."
+                    lines.append(f"{pad}  {k:<28} {val_str}")
         for name, child in self.sub_configs().items():
-            lines.append(f'{pad}  ┌─ {name}:')
+            lines.append(f"{pad}  ┌─ {name}:")
             lines.append(child.summary(_indent + 2))
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def __repr__(self) -> str:
         n = len(self._props.get(self._group, {}))
-        return f'{type(self).__name__}(type={self.config_type!r}, fields={n})'
+        return f"{type(self).__name__}(type={self.config_type!r}, fields={n})"

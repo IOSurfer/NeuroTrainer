@@ -4,6 +4,7 @@ UNet3D decoders.
 UNet3DDecoder : (b, e4..e1) -> (d1, d2, d3, d4)  finest -> coarsest, used by UNet3D.
 EffiDec3D     : alternative residual/upsampling decoder (not currently wired into UNet3D).
 """
+
 from __future__ import annotations
 
 from typing import Tuple
@@ -11,7 +12,11 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
-from apps.labelmap_segmentation.blocks import ChannelReductionResidualBlock, ResidualUpBlock, Up
+from apps.labelmap_segmentation.blocks import (
+    ChannelReductionResidualBlock,
+    ResidualUpBlock,
+    Up,
+)
 
 
 class UNet3DDecoder(nn.Module):

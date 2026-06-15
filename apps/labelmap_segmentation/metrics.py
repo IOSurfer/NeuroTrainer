@@ -23,9 +23,8 @@ def compute_dice(
         preds = (torch.sigmoid(logits) > threshold).float()
         t = targets.float()
         inter = (preds * t).sum()
-        score = ((2.0 * inter + smooth) /
-                 (preds.sum() + t.sum() + smooth)).item()
-        return {'dice_class_1': score, 'mean_dice': score}
+        score = ((2.0 * inter + smooth) / (preds.sum() + t.sum() + smooth)).item()
+        return {"dice_class_1": score, "mean_dice": score}
 
     preds = logits.argmax(dim=1)
     t = targets.squeeze(1).long()
@@ -36,12 +35,11 @@ def compute_dice(
         pred_c = (preds == c).float()
         t_c = (t == c).float()
         inter = (pred_c * t_c).sum()
-        dice = ((2.0 * inter + smooth) /
-                (pred_c.sum() + t_c.sum() + smooth)).item()
-        scores[f'dice_class_{c}'] = dice
+        dice = ((2.0 * inter + smooth) / (pred_c.sum() + t_c.sum() + smooth)).item()
+        scores[f"dice_class_{c}"] = dice
         total += dice
 
-    scores['mean_dice'] = total / (num_classes - 1)
+    scores["mean_dice"] = total / (num_classes - 1)
     return scores
 
 
@@ -60,7 +58,7 @@ def compute_iou(
         inter = (preds * t).sum()
         union = preds.sum() + t.sum() - inter
         score = ((inter + smooth) / (union + smooth)).item()
-        return {'iou_class_1': score, 'mean_iou': score}
+        return {"iou_class_1": score, "mean_iou": score}
 
     preds = logits.argmax(dim=1)
     t = targets.squeeze(1).long()
@@ -73,8 +71,8 @@ def compute_iou(
         inter = (pred_c * t_c).sum()
         union = pred_c.sum() + t_c.sum() - inter
         iou = ((inter + smooth) / (union + smooth)).item()
-        scores[f'iou_class_{c}'] = iou
+        scores[f"iou_class_{c}"] = iou
         total += iou
 
-    scores['mean_iou'] = total / (num_classes - 1)
+    scores["mean_iou"] = total / (num_classes - 1)
     return scores

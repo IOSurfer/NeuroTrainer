@@ -39,18 +39,18 @@ import torch.nn.functional as F
 
 
 def _eikonal_loss(g_pred: torch.Tensor) -> torch.Tensor:
-    grad_norm = torch.sqrt((g_pred ** 2).sum(dim=0) + 1e-6)
+    grad_norm = torch.sqrt((g_pred**2).sum(dim=0) + 1e-6)
     return ((grad_norm - 1.0) ** 2).mean()
 
 
 def _boundary_weight(phi: torch.Tensor, sigma: float = 1.0) -> torch.Tensor:
-    return torch.exp(-(phi ** 2) / (2 * sigma ** 2))
+    return torch.exp(-(phi**2) / (2 * sigma**2))
 
 
 def _weighted_recon_loss(
     pred: torch.Tensor, target: torch.Tensor, weight: torch.Tensor
 ) -> torch.Tensor:
-    per_voxel = F.smooth_l1_loss(pred, target, beta=1.0, reduction='none')
+    per_voxel = F.smooth_l1_loss(pred, target, beta=1.0, reduction="none")
     return ((1.0 + weight) * per_voxel).mean()
 
 
@@ -111,13 +111,19 @@ class SDFLoss(nn.Module):
 
         # Central-difference kernels for d/dD, d/dH, d/dW
         kernel_d = torch.zeros((C, 1, 3, 1, 1), device=device, dtype=dtype)
-        kernel_d[:, 0, :, 0, 0] = torch.tensor([-0.5, 0.0, 0.5], device=device, dtype=dtype)
+        kernel_d[:, 0, :, 0, 0] = torch.tensor(
+            [-0.5, 0.0, 0.5], device=device, dtype=dtype
+        )
 
         kernel_h = torch.zeros((C, 1, 1, 3, 1), device=device, dtype=dtype)
-        kernel_h[:, 0, 0, :, 0] = torch.tensor([-0.5, 0.0, 0.5], device=device, dtype=dtype)
+        kernel_h[:, 0, 0, :, 0] = torch.tensor(
+            [-0.5, 0.0, 0.5], device=device, dtype=dtype
+        )
 
         kernel_w = torch.zeros((C, 1, 1, 1, 3), device=device, dtype=dtype)
-        kernel_w[:, 0, 0, 0, :] = torch.tensor([-0.5, 0.0, 0.5], device=device, dtype=dtype)
+        kernel_w[:, 0, 0, 0, :] = torch.tensor(
+            [-0.5, 0.0, 0.5], device=device, dtype=dtype
+        )
 
         # Gradients of prediction (replicate padding)
         pred_pad_d = F.pad(pred, (0, 0, 0, 0, 1, 1), mode="replicate")
@@ -155,7 +161,7 @@ class SDFLoss(nn.Module):
             + self.normal_weight * loss_normal
         )
         return total, {
-            'recon':   loss_recon.detach(),
-            'eikonal': loss_eik.detach(),
-            'normal':  loss_normal.detach(),
+            "recon": loss_recon.detach(),
+            "eikonal": loss_eik.detach(),
+            "normal": loss_normal.detach(),
         }
