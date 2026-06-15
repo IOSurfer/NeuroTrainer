@@ -277,6 +277,32 @@ def load_manager_from_directory(directory: str) -> ConfigManager:
     return m
 
 
+# ── Visualisation ─────────────────────────────────────────────────────────────
+
+
+def _sdf_to_rgb(
+    sdf: torch.Tensor, vmin: float = -10.0, vmax: float = 10.0
+) -> torch.Tensor:
+    """
+    Map an SDF tensor to an RGB image with a fixed diverging colormap:
+    *vmin* -> blue, 0 -> white, *vmax* -> red.
+
+    Args:
+        sdf: Tensor of any shape ``(...)``.
+
+    Returns:
+        Tensor of shape ``(3, ...)`` with values in ``[0, 1]``.
+    """
+    t = ((sdf - vmin) / (vmax - vmin)).clamp(0.0, 1.0)
+    f_lower = (2.0 * t).clamp(0.0, 1.0)
+    f_upper = (2.0 * t - 1.0).clamp(0.0, 1.0)
+    lower = t < 0.5
+    r = torch.where(lower, f_lower, torch.ones_like(t))
+    g = torch.where(lower, f_lower, 1.0 - f_upper)
+    b = torch.where(lower, torch.ones_like(t), 1.0 - f_upper)
+    return torch.stack([r, g, b], dim=0)
+
+
 # ── EMA ────────────────────────────────────────────────────────────────────────
 
 
@@ -779,28 +805,26 @@ class Trainer:
             D, H, W = img.shape
 
             def _row(*slices):
-                return torch.stack([s.unsqueeze(0) for s in slices])
+                imgs = []
+                for s in slices:
+                    if s.dim() == 2:
+                        s = s.unsqueeze(0).expand(3, -1, -1)
+                    imgs.append(s)
+                return torch.stack(imgs)
 
             C = pred.shape[1]  # number of SDF channels
 
             for c in range(C):
-                sdf_pred = pred[0, c]
-                sdf_gt = y[0, c]
-
-                # normalize per-channel jointly
-                lo = min(sdf_pred.min(), sdf_gt.min())
-                hi = max(sdf_pred.max(), sdf_gt.max())
-                rng = hi - lo + 1e-8
-
-                sdf_pred_n = (sdf_pred - lo) / rng
-                sdf_gt_n = (sdf_gt - lo) / rng
+                # fixed diverging colormap: -10 -> blue, 0 -> white, 10 -> red
+                sdf_pred = _sdf_to_rgb(pred[0, c])
+                sdf_gt = _sdf_to_rgb(y[0, c])
 
                 tag_prefix = f"slices/sdf_channel_{c}"
 
                 # axial
                 self.writer.add_images(
                     f"{tag_prefix}/axial",
-                    _row(img[D // 2], sdf_gt_n[D // 2], sdf_pred_n[D // 2]),
+                    _row(img[D // 2], sdf_gt[:, D // 2], sdf_pred[:, D // 2]),
                     epoch,
                 )
 
@@ -809,8 +833,8 @@ class Trainer:
                     f"{tag_prefix}/coronal",
                     _row(
                         img[:, H // 2, :],
-                        sdf_gt_n[:, H // 2, :],
-                        sdf_pred_n[:, H // 2, :],
+                        sdf_gt[:, :, H // 2, :],
+                        sdf_pred[:, :, H // 2, :],
                     ),
                     epoch,
                 )
@@ -820,8 +844,8 @@ class Trainer:
                     f"{tag_prefix}/sagittal",
                     _row(
                         img[:, :, W // 2],
-                        sdf_gt_n[:, :, W // 2],
-                        sdf_pred_n[:, :, W // 2],
+                        sdf_gt[:, :, :, W // 2],
+                        sdf_pred[:, :, :, W // 2],
                     ),
                     epoch,
                 )
