@@ -105,13 +105,10 @@ def parse_args() -> argparse.Namespace:
     g.add_argument('--no_trilinear',   action='store_false', dest='trilinear')
 
     g = p.add_argument_group('Loss')
-    g.add_argument('--mse_weight',      type=float, default=1.0)
+    g.add_argument('--recon_weight',    type=float, default=1.0)
     g.add_argument('--eikonal_weight',  type=float, default=0.1)
     g.add_argument('--normal_weight',   type=float, default=0.0)
-    g.add_argument('--overlap_weight',  type=float, default=0.0)
-    g.add_argument('--boundary_weight', type=float, default=0.0)
     g.add_argument('--boundary_sigma',  type=float, default=1.0)
-    g.add_argument('--levelset_alpha',  type=float, default=10.0)
 
     g = p.add_argument_group('Optimiser / Scheduler')
     g.add_argument('--epochs',               type=int,   default=200)
@@ -183,13 +180,10 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     mc.decoder.trilinear      = args.trilinear
 
     lc = LossConfig()
-    lc.mse_weight      = args.mse_weight
+    lc.recon_weight    = args.recon_weight
     lc.eikonal_weight  = args.eikonal_weight
     lc.normal_weight   = args.normal_weight
-    lc.overlap_weight  = args.overlap_weight
-    lc.boundary_weight = args.boundary_weight
     lc.boundary_sigma  = args.boundary_sigma
-    lc.levelset_alpha  = args.levelset_alpha
 
     oc = OptimizerConfig()
     oc.type         = args.optimizer
@@ -377,13 +371,10 @@ class Trainer:
         )
 
         self.criterion = SDFLoss(
-            mse_weight=self.loss_cfg.mse_weight,
+            recon_weight=self.loss_cfg.recon_weight,
             eikonal_weight=self.loss_cfg.eikonal_weight,
             normal_weight=self.loss_cfg.normal_weight,
-            overlap_weight=self.loss_cfg.overlap_weight,
-            boundary_weight=self.loss_cfg.boundary_weight,
             boundary_sigma=self.loss_cfg.boundary_sigma,
-            levelset_alpha=self.loss_cfg.levelset_alpha,
         )
         self.optimizer = self._build_optimizer()
         self.scheduler = self._build_scheduler()
@@ -620,16 +611,12 @@ class Trainer:
                 self.writer.add_scalar('train/batch_loss',     loss.item(), step)
                 self.writer.add_scalar('train/batch_mean_mae', metrics['mean_mae'], step)
                 self.writer.add_scalar('train/batch_mean_mse', metrics['mean_mse'], step)
-                if 'mse' in components:
-                    self.writer.add_scalar('train/batch_loss_mse',      components['mse'].item(),      step)
+                if 'recon' in components:
+                    self.writer.add_scalar('train/batch_loss_recon',   components['recon'].item(),   step)
                 if 'eikonal' in components:
-                    self.writer.add_scalar('train/batch_loss_eikonal',  components['eikonal'].item(),  step)
+                    self.writer.add_scalar('train/batch_loss_eikonal', components['eikonal'].item(), step)
                 if 'normal' in components:
-                    self.writer.add_scalar('train/batch_loss_normal',   components['normal'].item(),   step)
-                if 'overlap' in components:
-                    self.writer.add_scalar('train/batch_loss_overlap',  components['overlap'].item(),  step)
-                if 'boundary' in components:
-                    self.writer.add_scalar('train/batch_loss_boundary', components['boundary'].item(), step)
+                    self.writer.add_scalar('train/batch_loss_normal',  components['normal'].item(),  step)
                 self.writer.add_scalar('train/lr', lr, step)
                 self.log.info(
                     f'Epoch {epoch:04d} | Batch {i}/{len(self.train_loader)} | '
@@ -673,7 +660,7 @@ class Trainer:
                                 {'train': train_m['loss'],
                                  'val':   val_m.get('loss', 0)}, epoch)
 
-        for key in ('loss_mse', 'loss_eikonal', 'loss_normal', 'loss_overlap', 'loss_boundary'):
+        for key in ('loss_recon', 'loss_eikonal', 'loss_normal'):
             if key in train_m:
                 self.writer.add_scalar(f'epoch/{key}', train_m[key], epoch)
 
@@ -932,11 +919,10 @@ class Trainer:
              'batch_size':   self.train_cfg.batch_size,
              'base_features': self.model_cfg.encoder.base_features,
              'optimizer':    self.opt_cfg.type,
-             'mse_weight':      self.loss_cfg.mse_weight,
+             'recon_weight':    self.loss_cfg.recon_weight,
              'eikonal_weight':  self.loss_cfg.eikonal_weight,
              'normal_weight':   self.loss_cfg.normal_weight,
-             'overlap_weight':  self.loss_cfg.overlap_weight,
-             'boundary_weight': self.loss_cfg.boundary_weight,
+             'boundary_sigma':  self.loss_cfg.boundary_sigma,
              'num_sdf_fields': self.data_cfg.num_sdf_fields,
              'ema':          self.train_cfg.ema,
              'ema_decay':    self.train_cfg.ema_decay if self.train_cfg.ema else 0.0},

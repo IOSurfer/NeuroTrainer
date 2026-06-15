@@ -132,20 +132,17 @@ class UNet3DConfig(EncoderDecoderModelConfig):
 class LossConfig(AbstractConfig):
     config_type = 'Loss'
 
-    mse_weight = ConfigField(
-        1.0,  doc='Weight of the MSE / Smooth-L1 reconstruction term')
+    recon_weight = ConfigField(
+        1.0,  doc='Weight of the combined Smooth-L1 reconstruction term '
+                  '(boosted near the zero level-set)')
     eikonal_weight = ConfigField(
         0.1,  doc='Weight of the Eikonal constraint (|Nabla SDF| approximate 1)')
     normal_weight = ConfigField(
-        0.0,  doc='Weight of the gradient-direction (normal) consistency term')
-    overlap_weight = ConfigField(
-        0.0,  doc='Weight of the soft level-set Dice overlap term')
-    boundary_weight = ConfigField(
-        0.0,  doc='Weight of the boundary-focused reconstruction term')
+        0.0,  doc='Weight of the gradient-direction (normal) consistency term '
+                  '(weighted near the zero level-set)')
     boundary_sigma = ConfigField(
-        1.0,  doc='Gaussian width (in voxels) for the boundary weighting')
-    levelset_alpha = ConfigField(
-        10.0, doc='Heaviside steepness for the level-set overlap term')
+        1.0,  doc='Gaussian width (in voxels) for the boundary weighting, '
+                  'shared by the reconstruction and normal terms')
 
 
 class OptimizerConfig(AbstractConfig):
