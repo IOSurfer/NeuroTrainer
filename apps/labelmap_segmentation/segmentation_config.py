@@ -212,6 +212,20 @@ class InfraConfig(AbstractConfig):
     device = ConfigField("auto", doc="auto | cpu | cuda")
     seed = ConfigField(42)
     resume = ConfigField(None, doc="Checkpoint file path to resume from")
+    resume_state = ConfigField(
+        True,
+        doc="When resuming, also restore optimizer / scheduler / scaler / EMA / epoch "
+        "state. Set False for transfer-learning or fine-tuning from a pre-trained "
+        "checkpoint where only model weights should be carried over.",
+    )
+    partial_load = ConfigField(
+        "full",
+        doc="Which model components to load from the checkpoint: "
+        "full | encoder | encoder_decoder. "
+        "'encoder' loads encoder + bottleneck only (head is re-initialised). "
+        "'encoder_decoder' loads encoder + bottleneck + decoder (head is re-initialised). "
+        "Optimizer / scheduler / EMA state is always skipped when partial_load != 'full'.",
+    )
     val_interval = ConfigField(1)
     save_interval = ConfigField(10)
     log_interval = ConfigField(10)

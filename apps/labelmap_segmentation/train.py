@@ -172,6 +172,22 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--num_workers", type=int, default=4)
     g.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     g.add_argument("--resume", default=None)
+    g.add_argument(
+        "--no_resume_state",
+        dest="resume_state",
+        action="store_false",
+        default=True,
+        help="Load only model weights from the checkpoint; skip optimizer / scheduler / "
+        "EMA state. Use for fine-tuning or transfer-learning from a pre-trained checkpoint.",
+    )
+    g.add_argument(
+        "--partial_load",
+        default="full",
+        choices=["full", "encoder", "encoder_decoder"],
+        help="Which model components to initialise from the checkpoint: "
+        "full (default) | encoder (encoder + bottleneck) | "
+        "encoder_decoder (encoder + bottleneck + decoder, head re-initialised).",
+    )
     g.add_argument("--seed", type=int, default=42)
     g.add_argument("--val_interval", type=int, default=1)
     g.add_argument("--save_interval", type=int, default=10)
@@ -265,6 +281,8 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     ic.device = args.device
     ic.seed = args.seed
     ic.resume = args.resume
+    ic.resume_state = args.resume_state
+    ic.partial_load = args.partial_load
     ic.val_interval = args.val_interval
     ic.save_interval = args.save_interval
     ic.log_interval = args.log_interval
@@ -870,16 +888,46 @@ class Trainer:
     def _load_checkpoint(self, path: str) -> None:
         self.log.info(f"Resuming from {path}")
         ckpt = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(ckpt["model"])
-        self.optimizer.load_state_dict(ckpt["optimizer"])
-        self.start_epoch = ckpt["epoch"] + 1
-        self.best_val_dice = ckpt.get("best_val_dice", -float("inf"))
-        if "scheduler" in ckpt and self.scheduler:
-            self.scheduler.load_state_dict(ckpt["scheduler"])
-        if "scaler" in ckpt and self.scaler:
-            self.scaler.load_state_dict(ckpt["scaler"])
-        if "ema" in ckpt and self.ema:
-            self.ema.load_state_dict(ckpt["ema"], self.device)
+
+        # ── Model weights ──────────────────────────────────────────────────────
+        model_state = ckpt["model"]
+        partial = self.infra_cfg.partial_load
+
+        if partial == "encoder":
+            prefixes = ("encoder.", "bottleneck.")
+            filtered = {k: v for k, v in model_state.items() if k.startswith(prefixes)}
+            missing, unexpected = self._raw_model.load_state_dict(filtered, strict=False)
+            self.log.info(
+                f"Partial load 'encoder' -- "
+                f"loaded {len(filtered)}  missing {len(missing)}  unexpected {len(unexpected)}"
+            )
+        elif partial == "encoder_decoder":
+            prefixes = ("encoder.", "bottleneck.", "decoder.")
+            filtered = {k: v for k, v in model_state.items() if k.startswith(prefixes)}
+            missing, unexpected = self._raw_model.load_state_dict(filtered, strict=False)
+            self.log.info(
+                f"Partial load 'encoder_decoder' -- "
+                f"loaded {len(filtered)}  missing {len(missing)}  unexpected {len(unexpected)}"
+            )
+        else:  # full
+            self._raw_model.load_state_dict(model_state)
+
+        # ── Training state ─────────────────────────────────────────────────────
+        if self.infra_cfg.resume_state and partial == "full":
+            self.optimizer.load_state_dict(ckpt["optimizer"])
+            self.start_epoch = ckpt["epoch"] + 1
+            self.best_val_dice = ckpt.get("best_val_dice", -float("inf"))
+            if "scheduler" in ckpt and self.scheduler:
+                self.scheduler.load_state_dict(ckpt["scheduler"])
+            if "scaler" in ckpt and self.scaler:
+                self.scaler.load_state_dict(ckpt["scaler"])
+            if "ema" in ckpt and self.ema:
+                self.ema.load_state_dict(ckpt["ema"], self.device)
+        else:
+            reason = (
+                "partial_load != 'full'" if partial != "full" else "resume_state=False"
+            )
+            self.log.info(f"Optimizer / scheduler / EMA state skipped ({reason})")
 
     # ── Test evaluation ───────────────────────────────────────────────────────
 
@@ -887,8 +935,11 @@ class Trainer:
     def test(self) -> float:
         best = self.ckpt_dir / "best.pth"
         if best.exists():
-            self.log.info("Loading best checkpoint for test evaluation…")
-            self._load_checkpoint(str(best))
+            self.log.info("Loading best checkpoint for test evaluation...")
+            ckpt = torch.load(str(best), map_location=self.device)
+            self._raw_model.load_state_dict(ckpt["model"])
+            if self.ema and "ema" in ckpt:
+                self.ema.load_state_dict(ckpt["ema"], self.device)
 
         with self._ema_scope():
             return self._run_test()
