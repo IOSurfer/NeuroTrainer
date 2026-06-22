@@ -28,18 +28,20 @@ def compute_dice(
 
     preds = logits.argmax(dim=1)
     t = targets.squeeze(1).long()
-    scores: Dict[str, float] = {}
-    total = 0.0
 
-    for c in range(1, num_classes):
-        pred_c = (preds == c).float()
-        t_c = (t == c).float()
-        inter = (pred_c * t_c).sum()
-        dice = ((2.0 * inter + smooth) / (pred_c.sum() + t_c.sum() + smooth)).item()
-        scores[f"dice_class_{c}"] = dice
-        total += dice
+    # One-hot + reduce over batch + spatial dims at once, then a single
+    # CPU transfer -- avoids a Python loop with one .item() sync per class.
+    pred_oh = F.one_hot(preds, num_classes).permute(0, 4, 1, 2, 3).float()
+    t_oh = F.one_hot(t, num_classes).permute(0, 4, 1, 2, 3).float()
+    dims = (0,) + tuple(range(2, pred_oh.dim()))
+    inter = (pred_oh * t_oh).sum(dim=dims)
+    union = pred_oh.sum(dim=dims) + t_oh.sum(dim=dims)
+    dice_per_class = ((2.0 * inter + smooth) / (union + smooth)).cpu().numpy()
 
-    scores["mean_dice"] = total / (num_classes - 1)
+    scores: Dict[str, float] = {
+        f"dice_class_{c}": float(dice_per_class[c]) for c in range(1, num_classes)
+    }
+    scores["mean_dice"] = float(dice_per_class[1:].mean())
     return scores
 
 
@@ -62,17 +64,16 @@ def compute_iou(
 
     preds = logits.argmax(dim=1)
     t = targets.squeeze(1).long()
-    scores: Dict[str, float] = {}
-    total = 0.0
 
-    for c in range(1, num_classes):
-        pred_c = (preds == c).float()
-        t_c = (t == c).float()
-        inter = (pred_c * t_c).sum()
-        union = pred_c.sum() + t_c.sum() - inter
-        iou = ((inter + smooth) / (union + smooth)).item()
-        scores[f"iou_class_{c}"] = iou
-        total += iou
+    pred_oh = F.one_hot(preds, num_classes).permute(0, 4, 1, 2, 3).float()
+    t_oh = F.one_hot(t, num_classes).permute(0, 4, 1, 2, 3).float()
+    dims = (0,) + tuple(range(2, pred_oh.dim()))
+    inter = (pred_oh * t_oh).sum(dim=dims)
+    union = pred_oh.sum(dim=dims) + t_oh.sum(dim=dims) - inter
+    iou_per_class = ((inter + smooth) / (union + smooth)).cpu().numpy()
 
-    scores["mean_iou"] = total / (num_classes - 1)
+    scores: Dict[str, float] = {
+        f"iou_class_{c}": float(iou_per_class[c]) for c in range(1, num_classes)
+    }
+    scores["mean_iou"] = float(iou_per_class[1:].mean())
     return scores

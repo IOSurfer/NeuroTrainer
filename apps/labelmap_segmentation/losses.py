@@ -33,17 +33,15 @@ class DiceLoss(nn.Module):
         t_long = targets.squeeze(1).long()
         t_oh = F.one_hot(t_long, self.num_classes).permute(0, 4, 1, 2, 3).float()
 
-        start = 1 if self.ignore_background else 0
-        dice_losses = []
-        for c in range(start, self.num_classes):
-            p_c, t_c = probs[:, c], t_oh[:, c]
-            inter = (p_c * t_c).sum()
-            dice_losses.append(
-                1.0
-                - (2.0 * inter + self.smooth) / (p_c.sum() + t_c.sum() + self.smooth)
-            )
+        # Reduce over batch + spatial dims at once, keeping the class dim --
+        # avoids a Python loop (and per-class kernel launches) over classes.
+        dims = (0,) + tuple(range(2, probs.dim()))
+        inter = (probs * t_oh).sum(dim=dims)
+        union = probs.sum(dim=dims) + t_oh.sum(dim=dims)
+        dice_per_class = (2.0 * inter + self.smooth) / (union + self.smooth)
 
-        return torch.stack(dice_losses).mean()
+        start = 1 if self.ignore_background else 0
+        return (1.0 - dice_per_class[start:]).mean()
 
 
 class DiceCELoss(nn.Module):
