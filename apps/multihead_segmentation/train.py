@@ -367,6 +367,28 @@ def load_manager_from_directory(directory: str) -> ConfigManager:
     return m
 
 
+# ── Graph tracing helper ───────────────────────────────────────────────────────
+
+
+class _GraphTraceWrapper(nn.Module):
+    """
+    Flattens MultiHeadUNet3D's ``{task: Tensor}`` output into a plain tuple.
+
+    torch.jit's tracer (used internally by SummaryWriter.add_graph) cannot
+    reliably handle a dict output, so the inherited ``_log_model_graph``
+    needs this wrapper instead of tracing ``self.model`` directly.
+    """
+
+    def __init__(self, model: nn.Module, task_names: List[str]) -> None:
+        super().__init__()
+        self.model = model
+        self.task_names = task_names
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+        out = self.model(x)
+        return tuple(out[t] for t in self.task_names)
+
+
 # ── Trainer ────────────────────────────────────────────────────────────────────
 
 
@@ -479,6 +501,25 @@ class Trainer(LabelMapTrainer):
 
         if self.infra_cfg.resume:
             self._load_checkpoint(self.infra_cfg.resume)
+
+    # ── Model graph logging ──────────────────────────────────────────────────
+
+    def _log_model_graph(self) -> None:
+        """Same as the parent's, but traces a tuple-output wrapper instead of
+        the model directly -- see _GraphTraceWrapper docstring."""
+        try:
+            shape = (
+                self.patch_cfg.size
+                if self.patch_cfg.enabled
+                else self.data_cfg.target_shape or (64, 64, 64)
+            )
+            dummy = torch.zeros(
+                1, len(self.data_cfg.modalities), *shape, device=self.device
+            )
+            wrapper = _GraphTraceWrapper(self.model, self.task_names)
+            self.writer.add_graph(wrapper, dummy)
+        except Exception as exc:
+            self.log.warning(f"Model graph logging skipped: {exc}")
 
     # ── Loss ──────────────────────────────────────────────────────────────────
 
