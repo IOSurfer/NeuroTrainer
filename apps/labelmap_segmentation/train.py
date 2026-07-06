@@ -96,9 +96,16 @@ def parse_args() -> argparse.Namespace:
         "--foreground_mask_name",
         default=None,
         help="Labelmap folder whose non-zero voxels are kept after "
-        "normalization, with all other voxels set to 0 "
+        "normalization, with all other voxels set to --background_fill_value "
         "(default: None = disabled; may equal --label_name or "
         "--znorm_mask_name to reuse that mask)",
+    )
+    g.add_argument(
+        "--background_fill_value",
+        type=float,
+        default=0.0,
+        help="Value written to voxels outside the foreground mask "
+        "(only used when --foreground_mask_name is set; default: 0.0)",
     )
 
     g = p.add_argument_group("Patch sampling")
@@ -224,6 +231,7 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     dc.normalization = args.normalization
     dc.znorm_mask_name = args.znorm_mask_name
     dc.foreground_mask_name = args.foreground_mask_name
+    dc.background_fill_value = args.background_fill_value
 
     pc = PatchConfig()
     pc.enabled = args.patch_based

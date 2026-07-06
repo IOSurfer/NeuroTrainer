@@ -41,8 +41,14 @@ class DataConfig(AbstractConfig):
         None,
         doc="Optional labelmap folder name; applied after normalization, "
         "intensity values are kept where this labelmap is non-zero and "
-        "set to 0 elsewhere (None = disabled). May be set to the same "
-        "value as label_name or znorm_mask_name to reuse that mask.",
+        "set to background_fill_value elsewhere (None = disabled). May be "
+        "set to the same value as label_name or znorm_mask_name to reuse "
+        "that mask.",
+    )
+    background_fill_value = ConfigField(
+        0.0,
+        doc="Fill value written to voxels outside the foreground mask "
+        "(only used when foreground_mask_name is set).",
     )
 
 

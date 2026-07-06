@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import torch
 import torchio as tio
 from torch.utils.data import DataLoader
 
@@ -161,22 +162,25 @@ def build_labelmap_segmentation_subjects(
 
 class ZeroOutsideMask(tio.Transform):
     """
-    Zero out intensity-image voxels outside a labelmap's non-zero region.
+    Fill intensity-image voxels outside a labelmap's non-zero region with a
+    constant value.
 
     Voxels where ``subject[mask_name]`` is non-zero keep their (normalized)
-    value; all other voxels are set to 0. Intended to run after intensity
-    normalization (see ``DataConfig.foreground_mask_name``).
+    value; all other voxels are set to ``fill_value`` (default 0). Intended
+    to run after intensity normalization (see ``DataConfig.foreground_mask_name``
+    and ``DataConfig.background_fill_value``).
     """
 
-    def __init__(self, mask_name: str, **kwargs) -> None:
+    def __init__(self, mask_name: str, fill_value: float = 0.0, **kwargs) -> None:
         super().__init__(**kwargs)
         self.mask_name = mask_name
-        self.args_names = ["mask_name"]
+        self.fill_value = fill_value
+        self.args_names = ["mask_name", "fill_value"]
 
     def apply_transform(self, subject: tio.Subject) -> tio.Subject:
         mask = subject[self.mask_name].data != 0
         for image in subject.get_images(intensity_only=True):
-            image.set_data(image.data * mask)
+            image.set_data(torch.where(mask, image.data, torch.full_like(image.data, self.fill_value)))
         return subject
 
 
@@ -196,7 +200,7 @@ def get_preprocessing_transform() -> tio.Compose:
     elif dcfg.normalization == "rescale":
         transforms.append(tio.RescaleIntensity(out_min_max=(0.0, 1.0)))
     if dcfg.foreground_mask_name:
-        transforms.append(ZeroOutsideMask(dcfg.foreground_mask_name))
+        transforms.append(ZeroOutsideMask(dcfg.foreground_mask_name, fill_value=dcfg.background_fill_value))
     return tio.Compose(transforms)
 
 
