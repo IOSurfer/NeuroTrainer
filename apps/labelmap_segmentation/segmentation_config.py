@@ -173,9 +173,16 @@ class UNet3DConfig(EncoderDecoderModelConfig):
 class LossConfig(AbstractConfig):
     config_type = "Loss"
 
-    type = ConfigField("dice_ce", doc="dice | dice_ce | ce")
-    dice_weight = ConfigField(0.5, doc="Dice term weight in combined loss")
-    ce_weight = ConfigField(0.5, doc="Cross-entropy term weight")
+    type = ConfigField("dice_ce", doc="dice | dice_ce | ce | focal | dice_focal")
+    dice_weight = ConfigField(0.5, doc="Dice term weight in dice_ce / dice_focal")
+    ce_weight = ConfigField(0.5, doc="Cross-entropy term weight in dice_ce")
+    focal_gamma = ConfigField(2.0, doc="Focal loss focusing parameter γ (focal / dice_focal only)")
+    focal_weight = ConfigField(0.5, doc="Focal term weight in dice_focal")
+    class_weights = ConfigField(
+        None,
+        doc="Per-class loss weights as a list [w0, w1, ...] in class-index order "
+        "(None = uniform). Applied to ce, focal, and dice_focal.",
+    )
 
 
 class OptimizerConfig(AbstractConfig):

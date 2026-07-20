@@ -168,9 +168,32 @@ def parse_args() -> argparse.Namespace:
     )
 
     g = p.add_argument_group("Loss")
-    g.add_argument("--loss", default="dice_ce", choices=["dice", "dice_ce", "ce"])
+    g.add_argument(
+        "--loss", default="dice_ce", choices=["dice", "dice_ce", "ce", "focal", "dice_focal"]
+    )
     g.add_argument("--dice_weight", type=float, default=0.5)
     g.add_argument("--ce_weight", type=float, default=0.5)
+    g.add_argument(
+        "--focal_gamma",
+        type=float,
+        default=2.0,
+        help="Focal loss focusing parameter γ (only used with --loss focal or dice_focal)",
+    )
+    g.add_argument(
+        "--focal_weight",
+        type=float,
+        default=0.5,
+        help="Focal term weight in dice_focal (alongside --dice_weight)",
+    )
+    g.add_argument(
+        "--class_weights",
+        type=float,
+        nargs="+",
+        default=None,
+        metavar="W",
+        help="Per-class loss weights in class-index order, e.g. --class_weights 0.1 0.9 "
+        "(None = uniform; applied to ce, focal, and dice_focal)",
+    )
     g.add_argument(
         "--task_weights",
         nargs="+",
@@ -289,6 +312,9 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     lc.type = args.loss
     lc.dice_weight = args.dice_weight
     lc.ce_weight = args.ce_weight
+    lc.focal_gamma = args.focal_gamma
+    lc.focal_weight = args.focal_weight
+    lc.class_weights = list(args.class_weights) if args.class_weights else None
     lc.task_weights = _parse_kv_pairs(args.task_weights, float)
 
     oc = OptimizerConfig()
@@ -525,13 +551,20 @@ class Trainer(LabelMapTrainer):
 
     def _build_loss(self) -> nn.Module:
         c = self.loss_cfg
-        return MultiHeadLoss(
+        alpha = list(c.class_weights) if c.class_weights else None
+        loss = MultiHeadLoss(
             task_num_classes=self.data_cfg.tasks,
             loss_type=c.type,
             dice_weight=c.dice_weight,
             ce_weight=c.ce_weight,
+            focal_gamma=c.focal_gamma,
+            focal_weight=c.focal_weight,
+            alpha=alpha,
             task_weights=c.task_weights,
         )
+        if c.type in ("focal", "dice_focal", "ce") and alpha:
+            loss = loss.to(self.device)
+        return loss
 
     # ── Batch helpers ─────────────────────────────────────────────────────────
 

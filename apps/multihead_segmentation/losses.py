@@ -12,18 +12,21 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 
-from apps.labelmap_segmentation.losses import DiceCELoss, DiceLoss
+from apps.labelmap_segmentation.losses import DiceCELoss, DiceFocalLoss, DiceLoss, FocalLoss
 
 
 class MultiHeadLoss(nn.Module):
     """
     Args:
         task_num_classes: Mapping task name -> num_classes.
-        loss_type:        dice | dice_ce | ce -- applied identically to every task.
-        dice_weight:       Dice term weight, used when loss_type == 'dice_ce'.
-        ce_weight:         Cross-entropy term weight, used when loss_type == 'dice_ce'.
-        task_weights:      Mapping task name -> weight in the cross-task sum
-                           (None = equal weight 1.0 for every task).
+        loss_type:        dice | dice_ce | ce | focal | dice_focal -- applied identically to every task.
+        dice_weight:      Dice term weight, used when loss_type == 'dice_ce' / 'dice_focal'.
+        ce_weight:        Cross-entropy term weight, used when loss_type == 'dice_ce'.
+        focal_gamma:      Focal loss γ, used when loss_type == 'focal' / 'dice_focal'.
+        focal_weight:     Focal term weight, used when loss_type == 'dice_focal'.
+        alpha:            Per-class weights [w0, w1, ...] for ce / focal / dice_focal (None = uniform).
+        task_weights:     Mapping task name -> weight in the cross-task sum
+                          (None = equal weight 1.0 for every task).
     """
 
     def __init__(
@@ -32,6 +35,9 @@ class MultiHeadLoss(nn.Module):
         loss_type: str = "dice_ce",
         dice_weight: float = 0.5,
         ce_weight: float = 0.5,
+        focal_gamma: float = 2.0,
+        focal_weight: float = 0.5,
+        alpha: Optional[list] = None,
         task_weights: Optional[Dict[str, float]] = None,
     ) -> None:
         super().__init__()
@@ -41,8 +47,16 @@ class MultiHeadLoss(nn.Module):
         def _make(nc: int) -> nn.Module:
             if loss_type == "dice":
                 return DiceLoss(nc)
+            if loss_type == "focal":
+                return FocalLoss(nc, gamma=focal_gamma, alpha=alpha)
+            if loss_type == "dice_focal":
+                return DiceFocalLoss(nc, dice_weight, focal_weight, focal_gamma, alpha)
             if loss_type == "ce":
-                return nn.BCEWithLogitsLoss() if nc == 1 else nn.CrossEntropyLoss()
+                if nc == 1:
+                    return nn.BCEWithLogitsLoss()
+                if alpha:
+                    return nn.CrossEntropyLoss(weight=torch.tensor(alpha, dtype=torch.float32))
+                return nn.CrossEntropyLoss()
             return DiceCELoss(nc, dice_weight, ce_weight)
 
         self.criteria = nn.ModuleDict(
@@ -79,7 +93,10 @@ class MultiHeadLoss(nn.Module):
             elif self.loss_type == "dice":
                 loss = crit(lg, tgt)
                 comp = {"dice": loss.detach()}
-            else:
+            elif self.loss_type == "focal":
+                loss = crit(lg, tgt)
+                comp = {"focal": loss.detach()}
+            else:  # dice_ce / dice_focal
                 loss, comp = crit(lg, tgt)
 
             total = total + self.task_weights.get(name, 1.0) * loss

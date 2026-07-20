@@ -1,4 +1,4 @@
-from typing import Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -42,6 +42,80 @@ class DiceLoss(nn.Module):
 
         start = 1 if self.ignore_background else 0
         return (1.0 - dice_per_class[start:]).mean()
+
+
+class FocalLoss(nn.Module):
+    """
+    Multi-class focal loss (Lin et al., 2017).
+
+    For ``num_classes == 1`` uses binary sigmoid focal loss; otherwise
+    softmax focal loss with optional per-class alpha weighting.
+    When ``ignore_background=True`` (default) background voxels are excluded
+    from the mean for the multi-class case.
+    """
+
+    def __init__(
+        self,
+        num_classes: int,
+        gamma: float = 2.0,
+        alpha: Optional[List[float]] = None,
+        ignore_background: bool = True,
+    ) -> None:
+        super().__init__()
+        self.num_classes = num_classes
+        self.gamma = gamma
+        self.ignore_background = ignore_background
+        weight = torch.tensor(alpha, dtype=torch.float32) if alpha is not None else None
+        self.register_buffer("alpha", weight)
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        if self.num_classes == 1:
+            probs = torch.sigmoid(logits)
+            t = targets.float()
+            p_t = probs * t + (1.0 - probs) * (1.0 - t)
+            focal_w = (1.0 - p_t) ** self.gamma
+            return (focal_w * F.binary_cross_entropy_with_logits(logits, t, reduction="none")).mean()
+
+        t_long = targets.squeeze(1).long()
+        log_probs = F.log_softmax(logits, dim=1)
+        # p_t: probability of the true class at each voxel [B, D, H, W]
+        p_t = log_probs.exp().gather(dim=1, index=t_long.unsqueeze(1)).squeeze(1)
+        focal_w = (1.0 - p_t) ** self.gamma
+        # alpha-weighted CE per voxel [B, D, H, W]
+        ce = F.nll_loss(log_probs, t_long, weight=self.alpha, reduction="none")  # type: ignore[arg-type]
+        if self.ignore_background:
+            fg = (t_long != 0).float()
+            return (focal_w * ce * fg).sum() / (fg.sum() + 1e-5)
+        return (focal_w * ce).mean()
+
+
+class DiceFocalLoss(nn.Module):
+    """Weighted combination of Dice loss and Focal loss."""
+
+    def __init__(
+        self,
+        num_classes: int,
+        dice_weight: float = 0.5,
+        focal_weight: float = 0.5,
+        gamma: float = 2.0,
+        alpha: Optional[List[float]] = None,
+        smooth: float = 1e-5,
+        ignore_background: bool = True,
+    ) -> None:
+        super().__init__()
+        self.dice = DiceLoss(num_classes, smooth, ignore_background)
+        self.focal = FocalLoss(num_classes, gamma, alpha, ignore_background)
+        self.dice_weight = dice_weight
+        self.focal_weight = focal_weight
+        self.num_classes = num_classes
+
+    def forward(
+        self, logits: torch.Tensor, targets: torch.Tensor
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        loss_dice = self.dice(logits, targets)
+        loss_focal = self.focal(logits, targets)
+        total = self.dice_weight * loss_dice + self.focal_weight * loss_focal
+        return total, {"dice": loss_dice.detach(), "focal": loss_focal.detach()}
 
 
 class DiceCELoss(nn.Module):

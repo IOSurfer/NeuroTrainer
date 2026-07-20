@@ -51,7 +51,7 @@ from apps.labelmap_segmentation.dataset import (
     create_data_loaders,
     create_labelmap_segmentation_datasets,
 )
-from apps.labelmap_segmentation.losses import DiceCELoss, DiceLoss
+from apps.labelmap_segmentation.losses import DiceCELoss, DiceFocalLoss, DiceLoss, FocalLoss
 from apps.labelmap_segmentation.metrics import compute_dice, compute_iou
 from apps.labelmap_segmentation.model import UNet3D
 
@@ -145,9 +145,32 @@ def parse_args() -> argparse.Namespace:
     )
 
     g = p.add_argument_group("Loss")
-    g.add_argument("--loss", default="dice_ce", choices=["dice", "dice_ce", "ce"])
+    g.add_argument(
+        "--loss", default="dice_ce", choices=["dice", "dice_ce", "ce", "focal", "dice_focal"]
+    )
     g.add_argument("--dice_weight", type=float, default=0.5)
     g.add_argument("--ce_weight", type=float, default=0.5)
+    g.add_argument(
+        "--focal_gamma",
+        type=float,
+        default=2.0,
+        help="Focal loss focusing parameter γ (only used with --loss focal or dice_focal)",
+    )
+    g.add_argument(
+        "--focal_weight",
+        type=float,
+        default=0.5,
+        help="Focal term weight in dice_focal (alongside --dice_weight)",
+    )
+    g.add_argument(
+        "--class_weights",
+        type=float,
+        nargs="+",
+        default=None,
+        metavar="W",
+        help="Per-class loss weights in class-index order, e.g. --class_weights 0.1 0.9 "
+        "(None = uniform; applied to ce, focal, and dice_focal)",
+    )
 
     g = p.add_argument_group("Optimiser / Scheduler")
     g.add_argument("--epochs", type=int, default=200)
@@ -260,6 +283,9 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     lc.type = args.loss
     lc.dice_weight = args.dice_weight
     lc.ce_weight = args.ce_weight
+    lc.focal_gamma = args.focal_gamma
+    lc.focal_weight = args.focal_weight
+    lc.class_weights = list(args.class_weights) if args.class_weights else None
 
     oc = OptimizerConfig()
     oc.type = args.optimizer
@@ -525,11 +551,21 @@ class Trainer:
     def _build_loss(self) -> nn.Module:
         c = self.loss_cfg
         n = self.data_cfg.num_classes
+        alpha = list(c.class_weights) if c.class_weights else None
         if c.type == "dice":
             return DiceLoss(n)
         if c.type == "dice_ce":
             return DiceCELoss(n, c.dice_weight, c.ce_weight)
-        return nn.BCEWithLogitsLoss() if n == 1 else nn.CrossEntropyLoss()
+        if c.type == "focal":
+            return FocalLoss(n, gamma=c.focal_gamma, alpha=alpha).to(self.device)
+        if c.type == "dice_focal":
+            return DiceFocalLoss(n, c.dice_weight, c.focal_weight, c.focal_gamma, alpha).to(self.device)
+        # ce
+        if n == 1:
+            return nn.BCEWithLogitsLoss()
+        if alpha:
+            return nn.CrossEntropyLoss(weight=torch.tensor(alpha, device=self.device))
+        return nn.CrossEntropyLoss()
 
     def _build_optimizer(self) -> optim.Optimizer:
         c, p = self.opt_cfg, self.model.parameters()
