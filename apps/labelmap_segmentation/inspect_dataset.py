@@ -361,7 +361,18 @@ class DatasetInspector:
                 ver.issues.append(f"no NIfTI file in '{self.label_name}'")
             else:
                 try:
-                    nib.load(str(nii))
+                    lbl_data = np.asarray(
+                        nib.load(str(nii)).get_fdata(), dtype=np.int32
+                    )
+                    oob_mask = lbl_data >= self.num_classes
+                    if oob_mask.any():
+                        oob_vals = np.unique(lbl_data[oob_mask]).tolist()
+                        ver.valid = False
+                        ver.issues.append(
+                            f"label has {int(oob_mask.sum())} voxel(s) with "
+                            f"out-of-range value(s) {oob_vals} "
+                            f"(num_classes={self.num_classes}, valid: 0-{self.num_classes - 1})"
+                        )
                 except Exception as exc:
                     ver.valid = False
                     ver.issues.append(f"cannot load label: {exc}")
