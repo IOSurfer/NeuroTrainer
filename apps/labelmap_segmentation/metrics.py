@@ -28,6 +28,13 @@ def compute_dice(
 
     preds = logits.argmax(dim=1)
     t = targets.squeeze(1).long()
+    t_max = int(t.max().item())
+    if t_max >= num_classes:
+        raise ValueError(
+            f"compute_dice: label value {t_max} is out of range for "
+            f"num_classes={num_classes} (valid: 0-{num_classes - 1}). "
+            f"Unique values in this batch: {t.unique().cpu().tolist()}"
+        )
 
     # One-hot + reduce over batch + spatial dims at once, then a single
     # CPU transfer -- avoids a Python loop with one .item() sync per class.
@@ -64,6 +71,13 @@ def compute_iou(
 
     preds = logits.argmax(dim=1)
     t = targets.squeeze(1).long()
+    t_max = int(t.max().item())
+    if t_max >= num_classes:
+        raise ValueError(
+            f"compute_iou: label value {t_max} is out of range for "
+            f"num_classes={num_classes} (valid: 0-{num_classes - 1}). "
+            f"Unique values in this batch: {t.unique().cpu().tolist()}"
+        )
 
     pred_oh = F.one_hot(preds, num_classes).permute(0, 4, 1, 2, 3).float()
     t_oh = F.one_hot(t, num_classes).permute(0, 4, 1, 2, 3).float()

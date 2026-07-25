@@ -31,6 +31,13 @@ class DiceLoss(nn.Module):
 
         probs = F.softmax(logits, dim=1)
         t_long = targets.squeeze(1).long()
+        t_max = int(t_long.max().item())
+        if t_max >= self.num_classes:
+            raise ValueError(
+                f"DiceLoss: label value {t_max} is out of range for "
+                f"num_classes={self.num_classes} (valid: 0–{self.num_classes - 1}). "
+                f"Unique values in this batch: {t_long.unique().cpu().tolist()}"
+            )
         t_oh = F.one_hot(t_long, self.num_classes).permute(0, 4, 1, 2, 3).float()
 
         # Reduce over batch + spatial dims at once, keeping the class dim --
@@ -77,6 +84,12 @@ class FocalLoss(nn.Module):
             return (focal_w * F.binary_cross_entropy_with_logits(logits, t, reduction="none")).mean()
 
         t_long = targets.squeeze(1).long()
+        t_max = int(t_long.max().item())
+        if t_max >= self.num_classes:
+            raise ValueError(
+                f"FocalLoss: 标签值 {t_max} 超出范围，num_classes={self.num_classes}（合法范围 0–{self.num_classes - 1}）。"
+                f"本批次唯一标签值：{t_long.unique().cpu().tolist()}"
+            )
         log_probs = F.log_softmax(logits, dim=1)
         # p_t: probability of the true class at each voxel [B, D, H, W]
         p_t = log_probs.exp().gather(dim=1, index=t_long.unsqueeze(1)).squeeze(1)
