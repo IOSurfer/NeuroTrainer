@@ -712,7 +712,6 @@ class Trainer:
 
         for i, batch in enumerate(self.train_loader):
             x, y = self._batch_to_tensors(batch)
-            self.optimizer.zero_grad()
             logits, loss, components = self._forward(x, y)
 
             loss_scaled = loss / accum_steps
