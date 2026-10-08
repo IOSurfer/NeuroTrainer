@@ -1,0 +1,48 @@
+// Affine (linear only, no deformable stage) registration of a subject brain
+// (moving: T1_N4 inside its Brainmask) to the MNI152 1 mm brain (fixed).
+//
+// elastix convention: the transform maps FIXED physical points to MOVING
+// physical points, in ITK's LPS world frame:
+//     p_moving = A (p_fixed - c) + t + c
+// preprocess.py parses A, t, c from TransformParameters.0.txt, converts to RAS and
+// inverts it to carry the cortical surfaces into MNI space.
+
+(FixedInternalImagePixelType "float")
+(MovingInternalImagePixelType "float")
+(FixedImageDimension 3)
+(MovingImageDimension 3)
+(UseDirectionCosines "true")
+
+(Registration "MultiResolutionRegistration")
+(Interpolator "BSplineInterpolator")
+(ResampleInterpolator "FinalBSplineInterpolator")
+(Resampler "DefaultResampler")
+(FixedImagePyramid "FixedSmoothingImagePyramid")
+(MovingImagePyramid "MovingSmoothingImagePyramid")
+(Optimizer "AdaptiveStochasticGradientDescent")
+(Transform "AffineTransform")
+(Metric "AdvancedMattesMutualInformation")
+
+(AutomaticScalesEstimation "true")
+(AutomaticTransformInitialization "true")
+(AutomaticTransformInitializationMethod "CenterOfGravity")
+(HowToCombineTransforms "Compose")
+
+(NumberOfResolutions 4)
+(MaximumNumberOfIterations 1000)
+(NumberOfHistogramBins 32)
+(ErodeMask "false")
+(ImageSampler "RandomCoordinate")
+(NumberOfSpatialSamples 4096)
+(NewSamplesEveryIteration "true")
+(CheckNumberOfSamples "true")
+
+(BSplineInterpolationOrder 1)
+(FinalBSplineInterpolationOrder 3)
+(DefaultPixelValue 0)
+// preprocess.py writes the registered images itself, with the MNI152 template's header;
+// elastix's own result image carries scanner qform/sform codes, so it is not written.
+(WriteResultImage "false")
+(ResultImagePixelType "float")
+(ResultImageFormat "nii")
+(WriteTransformParametersEachIteration "false")
