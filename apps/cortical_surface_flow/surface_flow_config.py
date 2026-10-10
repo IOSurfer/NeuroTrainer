@@ -132,6 +132,18 @@ class SurfaceFlowEncoderConfig(EncoderConfig):
 
     config_type = "SurfaceFlowEncoder"
 
+    type = ConfigField(
+        "residual_unet",
+        doc="plain: stride-2 CNN pyramid | residual: residual encoder | residual_unet: "
+        "residual encoder-decoder with skip connections (decoder levels are sampled)",
+    )
+    blocks_per_level = ConfigField(1, doc="Residual blocks per encoder / decoder level")
+    full_res_blocks = ConfigField(
+        False,
+        doc="Residual blocks and a concat decoder block also at full resolution "
+        "(~4x the cost of the plain encoder; False: light level 0, decoder output added "
+        "to the stem features)",
+    )
     base_features = ConfigField(16, doc="Feature channels at the first encoding level")
     depth = ConfigField(5, doc="Pyramid levels (stride-2 convs between them)")
     pe_channels = ConfigField(
@@ -200,7 +212,14 @@ class LossConfig(AbstractConfig):
         0.1, doc="closed_loop: weight of (1 - n_hat . n) for the predicted end-point normal"
     )
     tangential_weight = ConfigField(
-        0.1, doc="flow: weight of the along-surface part of the velocity error"
+        0.1,
+        doc="flow, and closed_loop with uncertainty=False: weight of the along-surface "
+        "part of the error",
+    )
+    uncertainty = ConfigField(
+        True,
+        doc="closed_loop: learned Gaussian posterior (beta-NLL, enables the Kalman "
+        "setpoint).  False = fixed-variance MSE on the end point (ablation)",
     )
 
 

@@ -1,0 +1,24 @@
+{
+ "name": "abl_lh_white_pial",
+ "description": "lh white -> pial.T1, IXI 163 / 20 / 20 (deterministic split, seed 0). Each variant removes one component from the full model and is trained for 10k steps (the final full model also for 30k); best.pth selected on validation fold detail; metrics on all 20 test subjects with 100 Euler steps. Parentheses: difference to the full model (10k).",
+ "schedule_note": "10k training steps per variant",
+ "base_args": ["--cache_dir", "cortical_flow/cache_ixi", "--hemi", "lh",
+               "--source_surface", "white", "--target_surface", "pial.T1",
+               "--steps", "10000", "--val_interval", "2000", "--save_interval", "1000",
+               "--log_images_interval", "2500"],
+ "test_args": ["--render", "1"],
+ "references_from": "full",
+ "variants": [
+  {"key": "full",        "label": "Full model (Res-UNet, closed loop, Bayesian, PE)"},
+  {"key": "plain",       "label": "− residual encoder-decoder (plain CNN)", "args": ["--encoder_type", "plain"]},
+  {"key": "no_decoder",  "label": "− decoder (residual encoder only)",      "args": ["--encoder_type", "residual"]},
+  {"key": "no_kalman",   "label": "− Kalman setpoint fusion",               "from": "full", "test_args": ["--kalman_q_mm", "0"]},
+  {"key": "open_loop",   "label": "− closed loop (open-loop flow matching)", "args": ["--architecture", "flow"]},
+  {"key": "no_bayes",    "label": "− Bayesian posterior (fixed-variance MSE, no Kalman)", "args": ["--no_uncertainty"]},
+  {"key": "no_offpath",  "label": "− off-path states (no perturbation, no rollouts)", "args": ["--perturb_mm", "0", "--onpolicy_p", "0"]},
+  {"key": "no_onpolicy", "label": "− on-policy rollouts",                   "args": ["--onpolicy_p", "0"]},
+  {"key": "no_pe",       "label": "− positional encoding",                  "args": ["--pe_channels", "0"]},
+  {"key": "no_t1",       "label": "− T1 (position-only MLP, no image, no normal)",                   "args": ["--no_t1"]},
+  {"key": "full_30k",    "label": "Full model, 30k steps",                  "args": ["--steps", "30000"]}
+ ]
+}

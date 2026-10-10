@@ -1,7 +1,8 @@
 """
 Template-free surface flow: one FreeSurfer surface -> another, conditioned on the T1.
 
-    T1 (+ learnable positional encoding)  ->  3D CNN  ->  feature pyramid
+    T1 (+ learnable positional encoding)  ->  residual 3D U-Net  ->  feature pyramid
+    (encoder type: plain CNN | residual encoder | residual encoder-decoder)
     vertex x, time t  ->  trilinear sampling of the pyramid at x  ->  f(x)
     [Fourier(x), Fourier(t), f(x)]  ->  MLP
 
@@ -67,6 +68,96 @@ class T1Encoder(nn.Module):
         return feats
 
 
+class ResBlock(nn.Module):
+    """3x3x3 conv - GN - SiLU - 3x3x3 conv - GN, + skip (1x1 conv when the width
+    changes), SiLU.  The second GN starts at zero gain, so every block starts as the
+    identity (or the projection) and the network as its shallow counterpart."""
+
+    def __init__(self, cin, cout):
+        super().__init__()
+        self.conv1, self.n1 = nn.Conv3d(cin, cout, 3, padding=1), _gn(cout)
+        self.conv2, self.n2 = nn.Conv3d(cout, cout, 3, padding=1), _gn(cout)
+        nn.init.zeros_(self.n2.weight)
+        self.skip = nn.Identity() if cin == cout else nn.Conv3d(cin, cout, 1)
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        h = self.act(self.n1(self.conv1(x)))
+        return self.act(self.n2(self.conv2(h)) + self.skip(x))
+
+
+class ResidualEncoderDecoder(nn.Module):
+    """Residual encoder (+ decoder) producing the same aligned feature pyramid as
+    T1Encoder: level l has base * 2^l channels and voxel j of level l sits on level-0
+    voxel 2^l j, so sample_pyramid is unchanged.
+
+    encoder  stem -> [ResBlock x blocks] -> (stride-2 conv -> [ResBlock x blocks]) x (levels-1)
+    decoder  (decoder=True) from the bottleneck up: transposed stride-2 conv (k3, p1,
+             which centres input j on output 2j, i.e. exactly inverts the encoder's
+             sampling) -> concat the encoder skip -> [ResBlock x blocks]; every
+             decoder level is part of the returned pyramid (deepest = bottleneck).
+    full_res_blocks=False keeps the full-resolution level light (most of the cost: 8x the
+             voxels of level 1): no residual blocks there, and the decoder's level-0 output
+             is SiLU(GN(up(y1))) + stem features instead of a concat + ResBlock."""
+
+    def __init__(self, base=16, levels=5, checkpoint=False, in_ch=1, blocks=1, decoder=True,
+                 full_res_blocks=False):
+        super().__init__()
+        self.checkpoint, self.decoder, self.full_res = checkpoint, decoder, full_res_blocks
+        ch = [base * 2 ** i for i in range(levels)]
+        self.stem = nn.Sequential(nn.Conv3d(in_ch, base, 3, padding=1), _gn(base), nn.SiLU())
+        self.down = nn.ModuleList([nn.Sequential(nn.Conv3d(ch[l - 1], ch[l], 3, stride=2, padding=1),
+                                                 _gn(ch[l]), nn.SiLU()) for l in range(1, levels)])
+        self.enc = nn.ModuleList([nn.Sequential(*[ResBlock(c, c) for _ in range(blocks)])
+                                  if (l > 0 or full_res_blocks) else nn.Identity()
+                                  for l, c in enumerate(ch)])
+        if decoder:
+            self.up = nn.ModuleList([nn.ConvTranspose3d(ch[l + 1], ch[l], 3, stride=2, padding=1)
+                                     for l in range(levels - 1)])
+            self.fuse = nn.ModuleList([nn.Sequential(ResBlock(2 * ch[l], ch[l]),
+                                                     *[ResBlock(ch[l], ch[l]) for _ in range(blocks - 1)])
+                                       if (l > 0 or full_res_blocks) else nn.Sequential(_gn(ch[l]), nn.SiLU())
+                                       for l in range(levels - 1)])
+        self.dims = ch
+        self.feat_dim = sum(ch)
+
+    def _run(self, block, x):
+        if self.checkpoint and self.training:
+            return torch.utils.checkpoint.checkpoint(block, x, use_reentrant=False)
+        return block(x)
+
+    def forward(self, vol):                       # vol: (1, C, D, H, W)
+        x = self._run(self.enc[0], self._run(self.stem, vol))
+        skips = [x]
+        for l, down in enumerate(self.down, start=1):
+            x = self._run(self.enc[l], self._run(down, x))
+            skips.append(x)
+        if not self.decoder:
+            return skips
+        outs, y = [None] * len(skips), skips[-1]
+        outs[-1] = y
+        for l in range(len(skips) - 2, -1, -1):
+            y = self.up[l](y, output_size=list(skips[l].shape[-3:]))
+            if l == 0 and not self.full_res:
+                y = self.fuse[0](y) + skips[0]
+            else:
+                y = self._run(self.fuse[l], torch.cat([y, skips[l]], 1))
+            outs[l] = y
+        return outs
+
+
+ENCODERS = ("plain", "residual", "residual_unet")
+
+
+def make_encoder(kind, base, levels, checkpoint, in_ch, blocks, full_res_blocks=False):
+    if kind == "plain":
+        return T1Encoder(base, levels, checkpoint, in_ch)
+    if kind in ("residual", "residual_unet"):
+        return ResidualEncoderDecoder(base, levels, checkpoint, in_ch, blocks, decoder=kind == "residual_unet",
+                                      full_res_blocks=full_res_blocks)
+    raise ValueError("encoder type must be one of %s, got %r" % (ENCODERS, kind))
+
+
 def sample_pyramid(feats, x, norm2vox):
     """Trilinear sample of every level at normalised points x (P, 3).  Level l voxel j
     sits on level-0 index 2^l j: sampled with align_corners=True at j = idx / 2^l, exact
@@ -129,7 +220,8 @@ def _mlp(d_in, hidden, layers):
 class _Conditioned(nn.Module):
     """Shared T1 encoder / positional encoding / feature sampling."""
 
-    def _init_encoder(self, shape, use_t1, base, levels, checkpoint, norm2vox, pe_ch, pe_stride):
+    def _init_encoder(self, shape, use_t1, base, levels, checkpoint, norm2vox, pe_ch, pe_stride,
+                      encoder_type="plain", blocks=1, full_res_blocks=False):
         self.use_t1 = use_t1
         self.shape = tuple(int(s) for s in shape)
         self.pe_ch = pe_ch if use_t1 else 0
@@ -138,7 +230,8 @@ class _Conditioned(nn.Module):
             self.pos = nn.Parameter(torch.zeros(1, pe_ch, *pe_shape))
         else:
             self.pos = None
-        self.encoder = T1Encoder(base, levels, checkpoint, in_ch=1 + self.pe_ch) if use_t1 else None
+        self.encoder = (make_encoder(encoder_type, base, levels, checkpoint, 1 + self.pe_ch, blocks,
+                                     full_res_blocks) if use_t1 else None)
         self.register_buffer("norm2vox", torch.as_tensor(norm2vox, dtype=torch.float32), persistent=False)
         return self.encoder.feat_dim if use_t1 else 0
 
@@ -165,11 +258,13 @@ class ClosedLoopFlow(_Conditioned):
     LV_MIN, LV_MAX = -4.6, 6.0          # sigma in [0.1, 20] mm
 
     def __init__(self, shape, half_fov, norm2vox, use_t1=True, base=16, levels=5, hidden=256,
-                 layers=4, n_freq_x=6, n_freq_t=4, checkpoint=False, pe_ch=8, pe_stride=8):
+                 layers=4, n_freq_x=6, n_freq_t=4, checkpoint=False, pe_ch=8, pe_stride=8,
+                 encoder_type="plain", blocks=1, full_res_blocks=False):
         super().__init__()
         self.half_fov = float(half_fov)
         self.n_freq_x, self.n_freq_t = n_freq_x, n_freq_t
-        fd = self._init_encoder(shape, use_t1, base, levels, checkpoint, norm2vox, pe_ch, pe_stride)
+        fd = self._init_encoder(shape, use_t1, base, levels, checkpoint, norm2vox, pe_ch, pe_stride,
+                                encoder_type, blocks, full_res_blocks)
         d_in = 3 * (1 + 2 * n_freq_x) + (1 + 2 * n_freq_t) + fd
         self.net = _mlp(d_in, hidden, layers)
         self.head = nn.Linear(hidden, 8)          # delta(3), lv_n, lv_t, n_hat(3)
@@ -249,11 +344,13 @@ class OpenLoopFlow(_Conditioned):
     """Flow-matching baseline: dX/dt = v(X, t, T1), Euler-integrated."""
 
     def __init__(self, shape, half_fov, norm2vox, use_t1=True, base=16, levels=5, hidden=256,
-                 layers=4, n_freq_x=6, n_freq_t=4, checkpoint=False, pe_ch=8, pe_stride=8):
+                 layers=4, n_freq_x=6, n_freq_t=4, checkpoint=False, pe_ch=8, pe_stride=8,
+                 encoder_type="plain", blocks=1, full_res_blocks=False):
         super().__init__()
         self.half_fov = float(half_fov)
         self.n_freq_x, self.n_freq_t = n_freq_x, n_freq_t
-        fd = self._init_encoder(shape, use_t1, base, levels, checkpoint, norm2vox, pe_ch, pe_stride)
+        fd = self._init_encoder(shape, use_t1, base, levels, checkpoint, norm2vox, pe_ch, pe_stride,
+                                encoder_type, blocks, full_res_blocks)
         self.velocity_net = VelocityNet(3 * (1 + 2 * n_freq_x) + (1 + 2 * n_freq_t) + fd, hidden, layers)
         self.last_sigma = None
 
@@ -283,7 +380,8 @@ def build_model(model_cfg, frame) -> nn.Module:
     e, h = model_cfg.encoder, model_cfg.head
     kw = dict(use_t1=model_cfg.use_t1, base=e.base_features, levels=e.depth, hidden=h.hidden,
               layers=h.layers, n_freq_x=h.n_freq_x, n_freq_t=h.n_freq_t, checkpoint=e.checkpoint,
-              pe_ch=e.pe_channels, pe_stride=e.pe_stride)
+              pe_ch=e.pe_channels, pe_stride=e.pe_stride, encoder_type=e.type, blocks=e.blocks_per_level,
+              full_res_blocks=e.full_res_blocks)
     cls = {"closed_loop": ClosedLoopFlow, "flow": OpenLoopFlow}.get(model_cfg.architecture)
     if cls is None:
         raise ValueError("unknown architecture %r (closed_loop | flow)" % model_cfg.architecture)

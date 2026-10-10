@@ -121,6 +121,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     g.add_argument("--depth", type=int, default=M.encoder.depth)
     g.add_argument("--pe_channels", type=int, default=M.encoder.pe_channels)
     g.add_argument("--pe_stride", type=int, default=M.encoder.pe_stride)
+    g.add_argument("--encoder_type", default=M.encoder.type, choices=["plain", "residual", "residual_unet"])
+    g.add_argument("--blocks_per_level", type=int, default=M.encoder.blocks_per_level)
+    g.add_argument("--full_res_blocks", action="store_true")
     g.add_argument("--encoder_checkpoint", action="store_true")
     g.add_argument("--hidden", type=int, default=M.head.hidden)
     g.add_argument("--layers", type=int, default=M.head.layers)
@@ -131,6 +134,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     g.add_argument("--beta_nll", type=float, default=L.beta_nll)
     g.add_argument("--normal_weight", type=float, default=L.normal_weight)
     g.add_argument("--tangential_weight", type=float, default=L.tangential_weight)
+    g.add_argument("--no_uncertainty", action="store_true",
+                   help="closed_loop: fixed-variance MSE instead of the beta-NLL posterior (ablation)")
 
     g = p.add_argument_group("Closed loop / integration")
     g.add_argument("--perturb_mm", type=float, default=C.perturb_mm,
@@ -198,11 +203,14 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     mc.encoder.base_features, mc.encoder.depth = args.base_features, args.depth
     mc.encoder.pe_channels, mc.encoder.pe_stride = args.pe_channels, args.pe_stride
     mc.encoder.checkpoint = args.encoder_checkpoint
+    mc.encoder.type, mc.encoder.blocks_per_level = args.encoder_type, args.blocks_per_level
+    mc.encoder.full_res_blocks = args.full_res_blocks
     mc.head.hidden, mc.head.layers = args.hidden, args.layers
     mc.head.n_freq_x, mc.head.n_freq_t = args.n_freq_x, args.n_freq_t
 
     lc = LossConfig()
     lc.beta_nll, lc.normal_weight, lc.tangential_weight = args.beta_nll, args.normal_weight, args.tangential_weight
+    lc.uncertainty = not args.no_uncertainty
 
     cc = ControlConfig()
     for k in ("perturb_mm", "perturb_rel", "onpolicy_p", "onpolicy_warmup", "rollout_steps",
@@ -318,8 +326,14 @@ class Trainer:
         self.closed = isinstance(self.model, ClosedLoopFlow)
         set_kalman(self.model, self.ctl_cfg.kalman_q_mm)
         self.n_params = sum(p.numel() for p in self.model.parameters())
-        self.log.info("model %s, T1 %s, %.2fM parameters"
-                      % (self.model_cfg.architecture, self.model_cfg.use_t1, self.n_params / 1e6))
+        self.log.info("model %s, encoder %s, T1 %s, uncertainty %s, %.2fM parameters"
+                      % (self.model_cfg.architecture, self.model_cfg.encoder.type, self.model_cfg.use_t1,
+                         self.loss_cfg.uncertainty, self.n_params / 1e6))
+        if self.closed and not self.loss_cfg.uncertainty and self.ctl_cfg.kalman_q_mm:
+            self.log.warning("uncertainty=False: the variance head is untrained, Kalman setpoint disabled")
+            self.ctl_cfg.kalman_q_mm = 0.0
+            set_kalman(self.model, 0.0)
+            ConfigManager.get().save_all(str(self.exp_dir))      # test.py must see it too
         self.optimizer = self._build_optimizer()
         self.scheduler = self._build_scheduler()
         self.amp = self.train_cfg.amp and self.device.type == "cuda"
@@ -435,7 +449,8 @@ class Trainer:
                     xt[on] = self.model.rollout(p0[on], t[on], fd, c.rollout_steps)
             mu, lvn, lvt, nh = self.model.estimate(xt, t, feats)
             loss, st = closed_loop_loss(mu, lvn, lvt, nh, p1, nrm, self.hf, self.loss_cfg.beta_nll,
-                                        self.loss_cfg.normal_weight)
+                                        self.loss_cfg.normal_weight, self.loss_cfg.uncertainty,
+                                        self.loss_cfg.tangential_weight)
             st["onpolicy_frac"] = on.float().mean()
         else:
             xt = (1.0 - t) * p0 + t * p1

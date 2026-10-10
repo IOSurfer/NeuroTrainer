@@ -36,6 +36,54 @@ controller  dx/dt = (m - x) / (1 - t)                         m = mu, Kalman-fus
   along-surface vertex position is learned per vertex.
 - `--architecture flow`: open-loop flow-matching baseline.
 
+### T1 encoder (`model.json: __encoder__.type`)
+
+| type | what it is | params | GPU peak / time per subject (fwd+bwd) |
+|---|---|---|---|
+| `residual_unet` (default) | residual encoder + decoder with skip connections; decoder levels are sampled | 9.3 M | 7.1 GiB / 0.35 s |
+| `residual` | residual encoder only | 6.3 M | 4.0 GiB / 0.20 s |
+| `plain` | stride-2 CNN pyramid (the prototype, `own_s2_t1`) | 4.0 M | 3.6 GiB / 0.18 s |
+
+ResBlock: conv3-GN-SiLU-conv3-GN + identity (1x1 conv if the width changes), SiLU; the
+second GN starts at zero gain, so each block starts as the identity.  The decoder
+upsamples with transposed stride-2 convs (k3, p1), which place decoder voxel j exactly
+on encoder voxel 2j -- the alignment sample_pyramid relies on (checked for odd and even
+grid sizes).  `full_res_blocks: false` keeps the full-resolution level light (stem only;
+decoder output = SiLU(GN(up(y1))) + stem features): with residual blocks at full
+resolution too the encoder needs 12.2 GiB and 0.72 s per subject.
+
+### Converged comparison (all 20 test subjects, Kalman q = 1 mm)
+
+| model | surface | T→P p95 | corr | fold r4 / r16 | flipped |
+|---|---|---|---|---|---|
+| plain CNN, 30k (`lh_white_pial_own_s2_t1`) | **0.160** | **0.493** | 0.496 | 0.825 / 0.900 | 1.90 % |
+| residual U-Net, 10k | 0.175 | 0.495 | 0.496 | 0.824 / 0.901 | **1.80 %** |
+| residual U-Net, 30k | 0.165 | 0.528 | 0.496 | 0.825 / 0.900 | 1.97 % |
+
+At an equal 10k-step budget the decoder is significantly better on correspondence and fold
+detail (ablation table), but after 30k steps the plain CNN matches it and has a slightly
+better tail (p95 better on 18/20 subjects).  The decoder speeds up convergence; it does not
+raise the converged accuracy -- at twice the cost per step.  The 10k ablation therefore
+measures effects at a fixed budget.
+
+## Ablation and figure
+
+```bat
+:: one variant after another (never two GPU jobs), resumable; tables after every variant
+python -m apps.cortical_surface_flow.ablation --spec apps/cortical_surface_flow/ablation_default.json
+::   -> output/abl_lh_white_pial_ablation/ablation.{md,json,tex}
+
+:: method figure (all panels are network outputs; runs on the CPU, ~5 min)
+python -m apps.cortical_surface_flow.figures.flow_figure_data ^
+    --config_dir output/abl_lh_white_pial_full_30k ^
+    --checkpoint output/abl_lh_white_pial_full_30k/checkpoints/best.pth
+python -m apps.cortical_surface_flow.figures.make_figure_v2
+::   -> output/figures/v2/method.{pdf,svg,png} (+ method_caption.tex)
+::   panels: 3D input, encoder-decoder with real feature maps, per-vertex trajectories,
+::   outputs, velocity field at t = .1/.5/.9, disturbance rejection (open vs closed
+::   loop), Bayesian setpoint fusion
+```
+
 ## Usage
 
 ```bat

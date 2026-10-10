@@ -69,6 +69,7 @@ def main(argv=None) -> None:
     mo = c[ConfigManager.MODEL]
     mo.architecture = "closed_loop" if g.get("model") == "closed_loop" else "flow"
     mo.use_t1 = bool(ck["use_t1"])
+    mo.encoder.type, mo.encoder.blocks_per_level = "plain", 1
     mo.encoder.base_features, mo.encoder.depth = g["base"], g["levels"]
     mo.encoder.pe_channels = g.get("pe_ch", 8) if mo.architecture == "closed_loop" else 0
     mo.encoder.pe_stride = g.get("pe_stride", 8)
