@@ -194,7 +194,11 @@ def get_preprocessing_transform() -> tio.Compose:
     if dcfg.target_spacing is not None:
         transforms.append(tio.Resample(dcfg.target_spacing))
     if dcfg.target_shape is not None:
-        transforms.append(tio.CropOrPad(dcfg.target_shape))
+        transforms.append(
+            tio.CropOrPad(dcfg.target_shape, mask_name=dcfg.crop_mask_name)
+            if dcfg.crop_mask_name
+            else tio.CropOrPad(dcfg.target_shape)
+        )
     if dcfg.normalization == "znorm":
         transforms.append(tio.ZNormalization(masking_method=dcfg.znorm_mask_name))
     elif dcfg.normalization == "rescale":
@@ -281,19 +285,17 @@ def create_labelmap_segmentation_datasets() -> (
 
     modalities = dcfg.modalities
     label_name = dcfg.label_name
-    mask_names = [dcfg.znorm_mask_name, dcfg.foreground_mask_name]
+    mask_names = [dcfg.znorm_mask_name, dcfg.foreground_mask_name, dcfg.crop_mask_name]
 
     preprocess = get_preprocessing_transform()
     augment = get_augmentation_transform()
     train_tf = tio.Compose([preprocess, augment]) if acfg.enabled else preprocess
 
+    train_subjects = build_labelmap_segmentation_subjects(
+        data_root / "train", modalities, label_name, mask_names=mask_names
+    )
     return (
-        tio.SubjectsDataset(
-            build_labelmap_segmentation_subjects(
-                data_root / "train", modalities, label_name, mask_names=mask_names
-            ),
-            transform=train_tf,
-        ),
+        tio.SubjectsDataset(train_subjects, transform=train_tf),
         tio.SubjectsDataset(
             build_labelmap_segmentation_subjects(
                 data_root / "validation", modalities, label_name, mask_names=mask_names

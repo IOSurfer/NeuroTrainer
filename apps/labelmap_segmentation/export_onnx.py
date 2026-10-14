@@ -242,6 +242,8 @@ def export(
         base_features=model_cfg.encoder.base_features,
         trilinear=model_cfg.decoder.trilinear,
         num_supervision_levels=model_cfg.num_supervision_levels,
+        encoder_type=model_cfg.encoder_type or "conv3d",
+        decoder_type=model_cfg.decoder_type or "conv3d",
     ).to(dev)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

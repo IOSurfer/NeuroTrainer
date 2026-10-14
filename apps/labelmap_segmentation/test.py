@@ -294,6 +294,8 @@ def run_test(
         base_features=model_cfg.encoder.base_features,
         trilinear=model_cfg.decoder.trilinear,
         num_supervision_levels=model_cfg.num_supervision_levels,
+        encoder_type=model_cfg.encoder_type or "conv3d",
+        decoder_type=model_cfg.decoder_type or "conv3d",
     ).to(dev)
 
     ckpt_path = Path(checkpoint)

@@ -29,6 +29,13 @@ class DataConfig(AbstractConfig):
     num_classes = ConfigField(2, doc="Output classes (background included)")
     target_spacing = ConfigField(None, doc="Resample spacing (x, y, z) in mm")
     target_shape = ConfigField(None, doc="Crop/pad target shape (D, H, W)")
+    crop_mask_name = ConfigField(
+        None,
+        doc="Optional labelmap folder name; when set together with target_shape the "
+        "volume is cropped (or padded) to a target_shape window centred on the "
+        "bounding box of this labelmap's non-zero voxels, instead of the image centre. "
+        "May equal znorm_mask_name / foreground_mask_name.",
+    )
     normalization = ConfigField("znorm", doc="znorm | rescale | none")
     znorm_mask_name = ConfigField(
         None,
@@ -157,6 +164,9 @@ class UNet3DConfig(EncoderDecoderModelConfig):
     """
 
     config_type = "Model"
+
+    encoder_type = ConfigField("conv3d", doc="conv3d | res | convnext")
+    decoder_type = ConfigField("conv3d", doc="conv3d | res | effidec")
 
     num_supervision_levels = ConfigField(
         1, doc="1 = single output; >1 = deep supervision with auxiliary heads"

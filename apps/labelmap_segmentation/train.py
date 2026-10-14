@@ -86,6 +86,12 @@ def parse_args() -> argparse.Namespace:
         "--normalization", default="znorm", choices=["znorm", "rescale", "none"]
     )
     g.add_argument(
+        "--crop_mask_name",
+        default=None,
+        help="Labelmap folder whose non-zero bounding box centres the --target_shape "
+        "window (default: None = centre of the image)",
+    )
+    g.add_argument(
         "--znorm_mask_name",
         default=None,
         help="Labelmap folder whose non-zero voxels define the ZNorm mask "
@@ -134,6 +140,20 @@ def parse_args() -> argparse.Namespace:
     )
 
     g = p.add_argument_group("Model")
+    g.add_argument(
+        "--encoder_type",
+        default="conv3d",
+        choices=["conv3d", "res", "convnext"],
+        help="conv3d = plain U-Net; res = residual blocks; convnext = depthwise "
+        "large-kernel ConvNeXt blocks",
+    )
+    g.add_argument(
+        "--decoder_type",
+        default="conv3d",
+        choices=["conv3d", "res", "effidec"],
+        help="conv3d = standard U-Net decoder; res = residual decoder; effidec = "
+        "EffiDec3D (half-resolution, about half the memory)",
+    )
     g.add_argument("--base_features", type=int, default=32)
     g.add_argument("--trilinear", action="store_true", default=True)
     g.add_argument("--no_trilinear", action="store_false", dest="trilinear")
@@ -239,8 +259,8 @@ def parse_args() -> argparse.Namespace:
 def setup_manager(args: argparse.Namespace) -> ConfigManager:
     """Build and register all configs from parsed CLI arguments."""
 
-    if args.data_root is None or args.num_classes:
-        print("Error: the following arguments are required: --data_root, --num_classes")
+    if args.data_root is None or args.num_classes is None:
+        raise SystemExit("error: the following arguments are required: --data_root, --num_classes")
 
     m = ConfigManager.get()
 
@@ -252,6 +272,7 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     dc.target_spacing = tuple(args.target_spacing) if args.target_spacing else None
     dc.target_shape = tuple(args.target_shape) if args.target_shape else None
     dc.normalization = args.normalization
+    dc.crop_mask_name = args.crop_mask_name
     dc.znorm_mask_name = args.znorm_mask_name
     dc.foreground_mask_name = args.foreground_mask_name
     dc.background_fill_value = args.background_fill_value
@@ -274,6 +295,8 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     ac.elastic = args.elastic
 
     mc = UNet3DConfig()
+    mc.encoder_type = args.encoder_type
+    mc.decoder_type = args.decoder_type
     mc.encoder.base_features = args.base_features
     mc.decoder.trilinear = args.trilinear
     mc.num_supervision_levels = args.num_supervision_levels
@@ -468,10 +491,15 @@ class Trainer:
             base_features=self.model_cfg.encoder.base_features,
             trilinear=self.model_cfg.decoder.trilinear,
             num_supervision_levels=self.model_cfg.num_supervision_levels,
+            encoder_type=self.model_cfg.encoder_type,
+            decoder_type=self.model_cfg.decoder_type,
         ).to(self.device)
 
         n_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        self.log.info(f"UNet3D -- trainable parameters: {n_params:,}")
+        self.log.info(
+            f"UNet3D (encoder: {self.model_cfg.encoder_type}, decoder: {self.model_cfg.decoder_type}) "
+            f"-- trainable parameters: {n_params:,}"
+        )
 
         self.criterion = self._build_loss()
         self.optimizer = self._build_optimizer()

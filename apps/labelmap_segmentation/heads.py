@@ -9,7 +9,7 @@ InferHead : main logits -> labelmap (argmax only, deployment fast path)
 from __future__ import annotations
 
 import math
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -44,16 +44,19 @@ class TrainHead(nn.Module):
         num_classes: int,
         trilinear: bool = True,
         num_supervision_levels: int = 1,
+        ch_per_level: Optional[Tuple[int, ...]] = None,
     ) -> None:
         super().__init__()
         factor = 2 if trilinear else 1
-        # Output-feature channels at each decoder level (finest -> coarsest)
-        ch_per_level: Tuple[int, ...] = (
-            base_features,  # d1
-            base_features * 2 // factor,  # d2
-            base_features * 4 // factor,  # d3
-            base_features * 8 // factor,  # d4
-        )
+        # Output-feature channels at each decoder level (finest -> coarsest);
+        # decoders with a different channel plan pass theirs via ``ch_per_level``.
+        if ch_per_level is None:
+            ch_per_level = (
+                base_features,  # d1
+                base_features * 2 // factor,  # d2
+                base_features * 4 // factor,  # d3
+                base_features * 8 // factor,  # d4
+            )
         n = min(max(num_supervision_levels, 1), len(ch_per_level))
         self.convs = nn.ModuleList(
             nn.Conv3d(ch_per_level[i], num_classes, kernel_size=1) for i in range(n)
