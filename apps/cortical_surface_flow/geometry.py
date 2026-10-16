@@ -11,7 +11,8 @@ Cache layout (written by preprocess.py)::
 
     <cache>/preprocess.json
     <cache>/canonical_<hemi>.npz          fsaverage faces of the hemisphere + T1 grid
-    <cache>/<subject>/T1_N4_mni.nii.gz    bias-corrected T1 on the MNI152 grid
+    <cache>/<subject>/T1_N4_mni.nii.gz    bias-corrected T1 on the MNI152 grid (neuropreprocess layout)
+    <cache>/<subject>/T1_mni.nii.gz       T1_Rigid as is, MNI152 grid (rigid_dataset layout)
     <cache>/<subject>/Brainmask_mni.nii.gz
     <cache>/<subject>/T1_input_mni.nii.gz z-scored in the mask, z_outside elsewhere
     <cache>/<subject>/<hemi>.<surface>.surf.gii   fsaverage 164k vertices, MNI mm
@@ -110,10 +111,24 @@ def load_subject_surface(cache: str, subject: str, hemi: str, surface: str) -> n
     return read_gifti(p)[0].astype(np.float32)
 
 
+T1_FILES = ("T1_mni.nii.gz", "T1_N4_mni.nii.gz")        # rigid-dataset cache, N4 cache
+
+
+def t1_file(cache: str, subject: str) -> str:
+    """The cached T1 of a subject, whichever layout wrote it."""
+    for n in T1_FILES:
+        p = os.path.join(cache, subject, n)
+        if os.path.isfile(p):
+            return p
+    raise FileNotFoundError("no cached T1 (%s) for %s in %s" % (" / ".join(T1_FILES), subject, cache))
+
+
 def list_subjects(cache: str, hemi: str, surfaces) -> list:
     """Cached subjects that have the T1 and every requested surface."""
     out = []
-    for d in sorted(glob.glob(os.path.join(cache, "*", "T1_N4_mni.nii.gz"))):
+    found = sorted(set(glob.glob(os.path.join(cache, "*", T1_FILES[0])) +
+                       glob.glob(os.path.join(cache, "*", T1_FILES[1]))))
+    for d in found:
         s = os.path.basename(os.path.dirname(d))
         if all(os.path.isfile(subject_surface_path(cache, s, hemi, x)) for x in surfaces):
             out.append(s)
@@ -279,7 +294,7 @@ class GridFrame:
 def load_subject_images(cache: str, subject: str) -> Tuple[np.ndarray, np.ndarray]:
     """(T1_N4 on the MNI grid, Brainmask as bool)."""
     d = os.path.join(cache, subject)
-    t1 = np.asarray(nib.load(os.path.join(d, "T1_N4_mni.nii.gz")).dataobj, np.float32)
+    t1 = np.asarray(nib.load(t1_file(cache, subject)).dataobj, np.float32)
     mask = np.asarray(nib.load(os.path.join(d, "Brainmask_mni.nii.gz")).dataobj) > 0
     return t1, mask
 

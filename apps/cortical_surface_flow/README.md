@@ -128,6 +128,51 @@ python -m apps.cortical_surface_flow.import_prototype ^
 `<cache_dir>/preprocess.json` records how the cache was built (paths, N4, elastix,
 hemispheres, surfaces).
 
+## Dataset layouts (`preprocess.py --layout`)
+
+| layout | raw data | images | registration |
+|---|---|---|---|
+| `neuropreprocess` (default) | `<root>/<subj>/{T1/*.nii.gz, freesurfer_brainmask/, surf/}` | N4, then resampled onto the MNI152 grid | elastix **affine** native T1 -> MNI152 brain; surfaces use the same matrix |
+| `rigid_dataset` | `<root>/<subj>/{T1_Rigid/NIFTI/T1_Rigid.nii.gz, FreeSurfer_Brainmask_Rigid/NIFTI/..., T1/<subj>-T1.nii.gz, FreeSurfer_Surf/surf.tar.gz}` (patterns are config fields) | `T1_Rigid` and its mask **as they are** (already on the MNI152 grid; no N4, no resampling) | surfaces are native: a **rigid** registration native T1 -> `T1_Rigid` gives the matrix (it is the same image under a rigid transform), then the same surface chain as above |
+
+```bat
+python -m apps.cortical_surface_flow.preprocess --layout rigid_dataset --raw_root D:\DATASET-IXI ^
+    --cache_dir D:\NeuroTrainer\input\cortical_surface_flow\cache_ixi_rigid ^
+    --hemis lh rh --surfaces orig white pial.T1 --workers 6 --threads 2
+python -m apps.cortical_surface_flow.cache_report --cache_dir <cache>     :: per-subject QC, 0 = nothing to check
+```
+
+**The rigid registration needs a fallback.**  Starting from the centre of mass converges for 186 of
+203 subjects (correlation of the registered native T1 with `T1_Rigid` = 1.0000, in ~5 s).  For the
+other 17 (all Guys-site) it ended at correlation ~ -0.1, with or without 27 rotated starts; a head
+mirror was ruled out (no reflection of the image matches).  Those subjects start from the principal
+axes of the native cortical surfaces against those of the rigid brain mask (4 sign choices, 4-level
+pyramid): all 17 then reach 0.99998 - 1.00000.  The principal-axis start rotation can be ~90 deg
+(axis permutation); the resulting transforms are small (2 - 29 deg, 7 - 61 mm).  `qc.json` records
+how each subject was started (`rigid_start`).
+
+QC that does not depend on the registration's own metric: the white surface sits on the strongest
+T1 gradient, so the mean gradient magnitude at its vertices must peak at zero shift (`white_boundary`;
+203 / 203 peak at zero, minimum centre / best = 0.9969); surfaces lie inside the mask (>= 0.99); pial
+vertices lie outside white along the white normal for 92 - 94 % of vertices in both hemispheres
+(catches flipped normals).
+
+## Formal runs
+
+`queue_formal_rigid.json` + `run_queue.py`: four experiments on the rigid cache, one after another
+(`lh white -> pial`, `lh orig -> white`, `rh white -> pial`, `rh orig -> white`), the ablation's best
+configuration without the positional encoding (closed loop, Bayesian posterior, Kalman setpoint,
+perturbation + on-policy rollouts, residual encoder-decoder), 30k steps, the 163 / 20 / 20 split of all
+earlier experiments (`--split_file`).
+
+```bat
+python -m apps.cortical_surface_flow.run_queue --spec apps/cortical_surface_flow/queue_formal_rigid.json
+```
+
+Resumes interrupted experiments, runs the test split after each, and keeps a TensorBoard on the
+experiment that is currently training (first free port from 6006; a TensorBoard someone else runs is
+never touched).  The queue's own folder: `output/formal_rigid_queue/`.
+
 ## Cache
 
 ```

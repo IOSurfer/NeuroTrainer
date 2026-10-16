@@ -94,6 +94,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     g.add_argument("--source_surface", default=D.source_surface)
     g.add_argument("--target_surface", default=D.target_surface)
     g.add_argument("--x0_mode", default=D.x0_mode, choices=["subject", "template"])
+    g.add_argument("--split_file", default=None,
+                   help='JSON {"train": [...], "val": [...], "test": [...]}; overrides the subject lists '
+                        "and the deterministic split (the lists are still saved to data.json)")
     g.add_argument("--train_subjects", nargs="*", default=None)
     g.add_argument("--val_subjects", nargs="*", default=None)
     g.add_argument("--test_subjects", nargs="*", default=None)
@@ -189,6 +192,9 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     for k in ("cache_dir", "hemi", "source_surface", "target_surface", "x0_mode",
               "n_val", "n_test", "split_seed", "cache_device"):
         setattr(dc, k, getattr(args, k))
+    if args.split_file:                                 # one split shared by several experiments
+        sp = json.load(open(args.split_file, encoding="utf-8"))
+        args.train_subjects, args.val_subjects, args.test_subjects = sp["train"], sp["val"], sp["test"]
     dc.train_subjects, dc.val_subjects, dc.test_subjects = \
         args.train_subjects, args.val_subjects, args.test_subjects
 

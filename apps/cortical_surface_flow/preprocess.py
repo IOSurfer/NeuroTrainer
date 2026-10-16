@@ -41,8 +41,11 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 from multiprocessing import Pool
 from typing import Dict, List, Optional
@@ -50,7 +53,7 @@ from typing import Dict, List, Optional
 import nibabel as nib
 import numpy as np
 from nibabel.freesurfer import read_geometry
-from scipy.ndimage import map_coordinates
+from scipy.ndimage import gaussian_gradient_magnitude, map_coordinates
 
 from apps.cortical_surface_flow.geometry import (
     apply_affine, fsaverage_path, read_gifti, sphere_barycentric, subject_surface_path, utf8_stdout,
@@ -168,6 +171,169 @@ def surface_cras(surf_path):
     return np.asarray(meta["cras"], np.float64)
 
 
+def grid_equal(img, tpl):
+    """Same voxel grid (shape + affine); qform / sform codes may differ."""
+    return bool(img.shape == tpl.shape and np.allclose(img.affine, tpl.affine, atol=1e-4))
+
+
+def sitk_to_ras(t):
+    """SimpleITK transform (fixed LPS point -> moving LPS point) -> 4x4 RAS matrix."""
+    P = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], float) * 100.0
+    Q = np.array([t.TransformPoint(tuple(p)) for p in P])
+    M = np.eye(4)
+    M[:3, :3] = (Q[1:] - Q[0]).T / 100.0
+    M[:3, 3] = Q[0]
+    return LPS @ M @ LPS
+
+
+def _principal_axes(pts):
+    c = pts.mean(0)
+    w, v = np.linalg.eigh(np.cov((pts - c).T))
+    return c, v[:, ::-1]
+
+
+def _cortex_points_lps(tar_path):
+    """Both pial surfaces in native scanner space as LPS points (SimpleITK's physical space)."""
+    tmp = tempfile.mkdtemp(prefix="pial_")
+    try:
+        extract_surfaces(tar_path, ("lh", "rh"), ("pial.T1",), tmp)
+        pts = []
+        for h in ("lh", "rh"):
+            path = os.path.join(tmp, "%s.pial.T1" % h)
+            v, _ = read_geometry(path)
+            pts.append(v + surface_cras(path))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    P = np.concatenate(pts)
+    P[:, :2] *= -1
+    return P
+
+
+def register_rigid(fixed_path, moving_path, mask_path, cfg, tar_path=None):
+    """Rigid (Euler) registration of the native T1 (moving) to T1_Rigid (fixed): same
+    image under a rigid transform, so a scale-free correlation metric on a masked, seeded
+    random sample converges to the exact transform.
+
+    Start 1: centre-of-mass alignment (a few seconds; right for ~91 % of the subjects).
+    Start 2, if the correlation stays below cfg['rigid_ncc_min']: the head can be rotated by up
+    to ~90 deg, beyond any image-based capture range, so the principal axes of the two
+    cortical surfaces (native space) are aligned with those of the rigid brain mask; the four
+    sign choices that keep a proper rotation are each refined (4-level pyramid) and the first
+    that reaches the threshold wins (else the best).
+    -> M (4x4 RAS, MNI point -> native scanner point), metric, NCC of the resampled native
+    T1 against T1_Rigid in the dilated brain mask, how the start was found."""
+    import SimpleITK as sitk
+    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(int(cfg["threads"]))
+    fixed = sitk.Cast(sitk.ReadImage(fixed_path), sitk.sitkFloat32)
+    moving = sitk.Cast(sitk.ReadImage(moving_path), sitk.sitkFloat32)
+    mask_img = sitk.ReadImage(mask_path)
+    mask = sitk.BinaryDilate(mask_img > 0, [8, 8, 8])
+    inside = sitk.GetArrayFromImage(mask).ravel() > 0
+    fx = sitk.GetArrayFromImage(fixed).ravel()[inside].astype(np.float64)
+    fx -= fx.mean()
+
+    def run(init, shrink, sigma):
+        reg = sitk.ImageRegistrationMethod()
+        reg.SetMetricAsCorrelation()
+        reg.SetMetricFixedMask(mask)
+        reg.SetMetricSamplingStrategy(reg.RANDOM)
+        reg.SetMetricSamplingPercentage(float(cfg["rigid_sampling"]), 1)
+        reg.SetInterpolator(sitk.sitkLinear)
+        reg.SetOptimizerAsRegularStepGradientDescent(learningRate=1.0, minStep=1e-5, numberOfIterations=300,
+                                                     relaxationFactor=0.5, gradientMagnitudeTolerance=1e-8)
+        reg.SetOptimizerScalesFromPhysicalShift()
+        reg.SetShrinkFactorsPerLevel(shrink)
+        reg.SetSmoothingSigmasPerLevel(sigma)
+        reg.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+        reg.SetInitialTransform(init, inPlace=False)
+        t = reg.Execute(fixed, moving)
+        res = sitk.GetArrayFromImage(sitk.Resample(moving, fixed, t, sitk.sitkLinear, 0.0)).ravel()[inside]
+        a = res.astype(np.float64) - res.mean()
+        ncc = float((a * fx).sum() / np.sqrt((a * a).sum() * (fx * fx).sum()))
+        return t, float(reg.GetMetricValue()), ncc
+
+    init = sitk.CenteredTransformInitializer(fixed, moving, sitk.Euler3DTransform(),
+                                             sitk.CenteredTransformInitializerFilter.MOMENTS)
+    t, metric, ncc = run(init, [4, 2, 1], [2, 1, 0])
+    how = "centre of mass"
+    if ncc < cfg["rigid_ncc_min"] and tar_path is not None:
+        mimg = nib.load(mask_path)
+        ijk = np.argwhere(np.asarray(mimg.dataobj) > 0)[::50]
+        ras = ijk @ mimg.affine[:3, :3].T + mimg.affine[:3, 3]
+        ras[:, :2] *= -1
+        cr, vr = _principal_axes(ras)
+        cn, vn = _principal_axes(_cortex_points_lps(tar_path))
+        best = (ncc, t, metric)
+        for sx in (1, -1):
+            for sy in (1, -1):
+                R = vn @ np.diag([sx, sy, sx * sy]) @ vr.T          # rigid-space axes -> native axes
+                st = sitk.Euler3DTransform()
+                st.SetMatrix(tuple(R.ravel()))
+                st.SetCenter(tuple(cr))
+                st.SetTranslation(tuple(cn - cr))
+                t2, m2, n2 = run(st, [8, 4, 2, 1], [4, 2, 1, 0])
+                if n2 > best[0]:
+                    best, how = (n2, t2, m2), "surface principal axes (start rotation %.0f deg)" % np.degrees(
+                        np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1)))
+                if best[0] >= cfg["rigid_ncc_min"]:
+                    break
+            if best[0] >= cfg["rigid_ncc_min"]:
+                break
+        ncc, t, metric = best
+    return sitk_to_ras(t), metric, ncc, how
+
+
+def extract_surfaces(tar_path, hemis, surfaces, dest):
+    """Only the needed members of surf.tar.gz (+ sphere.reg), flattened into `dest`."""
+    want = {"%s.%s" % (h, n) for h in hemis for n in tuple(surfaces) + ("sphere.reg",)}
+    with tarfile.open(tar_path) as t:
+        members = [m for m in t.getmembers() if m.isfile() and os.path.basename(m.name) in want]
+        missing = want - {os.path.basename(m.name) for m in members}
+        if missing:
+            raise FileNotFoundError("%s lacks %s" % (tar_path, sorted(missing)))
+        for m in members:
+            m.name = os.path.basename(m.name)
+        try:
+            t.extractall(dest, members=members, filter="data")
+        except TypeError:                                   # Python < 3.12
+            t.extractall(dest, members=members)
+    return dest
+
+
+def white_boundary_check(t1_path, x, mni2vox):
+    """Registration QC independent of the transform's own metric: the white surface sits on
+    the strongest T1 gradient, so the mean gradient magnitude at its vertices must peak at
+    zero shift (+-0.5 mm along each axis)."""
+    vol = np.asarray(nib.load(t1_path).dataobj, np.float32)
+    grad = gaussian_gradient_magnitude(vol, 0.7)
+    idx = apply_affine(mni2vox, x)
+    prof = {}
+    for ax, name in enumerate("xyz"):
+        prof[name] = [float(map_coordinates(grad, (idx + np.eye(3)[ax] * sh).T, order=1, mode="nearest").mean())
+                      for sh in (-0.5, 0.0, 0.5)]
+    centre = prof["x"][1]
+    return {"strength": centre, "centre_over_best": centre / max(max(v) for v in prof.values()),
+            "peak_at_zero": bool(all(v[1] >= max(v) - 1e-9 for v in prof.values())), "profiles": prof}
+
+
+def find_subjects_rigid(cfg):
+    """rigid_dataset layout: every subject folder that has the T1_Rigid, its mask, the native
+    T1 and the surface archive.  The 4th tuple element is the archive."""
+    out, skipped = [], []
+    for d in sorted(glob.glob(os.path.join(cfg["raw_root"], "*"))):
+        if not os.path.isdir(d):
+            continue
+        s = os.path.basename(d)
+        f = lambda pat: os.path.join(d, pat.format(subject=s))              # noqa: E731
+        t1, mk, nat, tar = f(cfg["t1_pattern"]), f(cfg["mask_pattern"]), f(cfg["native_t1_pattern"]), \
+            f(cfg["surf_archive_pattern"])
+        if all(os.path.isfile(p) for p in (t1, mk, nat, tar)):
+            out.append((s, t1, mk, tar))
+        else:
+            skipped.append(s)
+    return out, skipped
+
+
 def find_subjects(raw_root, hemis):
     """NeuroPreprocess layout: <subject>/{T1/*.nii.gz, freesurfer_brainmask/, surf/}."""
     out, skipped = [], []
@@ -212,11 +378,35 @@ def process_subject(job):
     tpl = nib.load(cfg["mni_template"])
     qc_path = os.path.join(d, "qc.json")
     qc = json.load(open(qc_path)) if os.path.isfile(qc_path) else {}
-    images = ("T1_N4_mni.nii.gz", "Brainmask_mni.nii.gz", "T1_input_mni.nii.gz")
+    rigid = cfg["layout"] == "rigid_dataset"
+    images = ("T1_mni.nii.gz", "Brainmask_mni.nii.gz") if rigid else \
+        ("T1_N4_mni.nii.gz", "Brainmask_mni.nii.gz", "T1_input_mni.nii.gz")
     log = []
 
     if "fixed_to_moving_ras" in qc and all(os.path.isfile(os.path.join(d, n)) for n in images):
         M = np.asarray(qc["fixed_to_moving_ras"], np.float64)
+    elif rigid:
+        t1_img, mk_img = nib.load(t1_path), nib.load(mask_path)
+        assert grid_equal(t1_img, tpl) and grid_equal(mk_img, tpl), \
+            "%s: T1 / mask are not on the grid of %s" % (sess, cfg["mni_template"])
+        native = os.path.join(cfg["raw_root"], sess, cfg["native_t1_pattern"].format(subject=sess))
+        M, metric, ncc, how = register_rigid(t1_path, native, mask_path, cfg, surf_dir)
+        assert ncc >= cfg["rigid_ncc_min"], \
+            "%s: rigid registration did not converge (NCC %.5f < %.3f)" % (sess, ncc, cfg["rigid_ncc_min"])
+        t1 = np.asarray(t1_img.dataobj, np.float32)
+        mask = np.asarray(mk_img.dataobj) > 0
+        for name, arr in (("T1_mni.nii.gz", t1), ("Brainmask_mni.nii.gz", mask.astype(np.uint8))):
+            nib.save(template_nifti(arr, tpl), os.path.join(d, name))
+            assert same_geometry(nib.load(os.path.join(d, name)), tpl), "%s: %s geometry" % (sess, name)
+        brain = np.asarray(tpl.dataobj) > 0
+        qc.update({"rigid_metric": metric, "rigid_ncc": ncc, "rigid_start": how,
+                   "rigid_rotation_deg": float(np.degrees(np.arccos(np.clip((np.trace(M[:3, :3]) - 1) / 2, -1, 1)))),
+                   "rigid_translation_mm": float(np.linalg.norm(M[:3, 3])),
+                   "fixed_to_moving_ras": M.tolist(), "geometry_equals_template": True,
+                   "brainmask_dice_mni_brain": float(2 * (mask & brain).sum() / (mask.sum() + brain.sum()))})
+        log.append("rigid (NCC %.5f, %.1f deg, %.1f mm%s)" % (
+            ncc, qc["rigid_rotation_deg"], qc["rigid_translation_mm"],
+            "" if how == "centre of mass" else "; start: " + how))
     else:
         nd, md, aff, info = load_native(t1_path, mask_path, cfg)
         fixed_mask = os.path.join(cache, "elastix", "mni_brain_mask.nii.gz")
@@ -243,6 +433,11 @@ def process_subject(job):
     mask = np.asarray(nib.load(os.path.join(d, "Brainmask_mni.nii.gz")).dataobj) > 0
     mni2vox = np.linalg.inv(tpl.affine)
     sqc = qc.setdefault("surfaces", {})
+    tmp = None
+    if rigid and any(not os.path.isfile(subject_surface_path(cache, sess, h, s)) or
+                     s not in sqc.get(h, {}) for h in cfg["hemis"] for s in cfg["surfaces"]):
+        tmp = tempfile.mkdtemp(prefix="surf_", dir=os.path.join(cache, "elastix"))
+        surf_dir = extract_surfaces(surf_dir, cfg["hemis"], cfg["surfaces"], tmp)
     for hemi in cfg["hemis"]:
         todo = [s for s in cfg["surfaces"]
                 if not os.path.isfile(subject_surface_path(cache, sess, hemi, s))]
@@ -284,8 +479,15 @@ def process_subject(job):
             else:
                 write_gifti(p_out, x, faces)
             hq[s] = entry
+            if s == "white" and "white_boundary" not in qc:
+                qc["white_boundary"] = white_boundary_check(
+                    os.path.join(d, images[0]), x, mni2vox)
+                assert qc["white_boundary"]["centre_over_best"] >= 0.95, \
+                    "%s: white surface is not on the T1 gradient maximum (%s)" % (sess, qc["white_boundary"])
         log.append("%s: +%s%s" % (hemi, ",".join(todo) or "-",
                                   (" (re-derived %s)" % ",".join(check)) if check else ""))
+    if tmp:
+        shutil.rmtree(tmp, ignore_errors=True)
     with open(qc_path + ".tmp", "w") as fh:
         json.dump(qc, fh, indent=1)
     os.replace(qc_path + ".tmp", qc_path)
@@ -300,7 +502,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--config", default=None, help="Load all settings from a saved preprocess.json")
+    p.add_argument("--layout", default=d.layout, choices=["neuropreprocess", "rigid_dataset"])
     p.add_argument("--raw_root", default=d.raw_root)
+    p.add_argument("--t1_pattern", default=d.t1_pattern)
+    p.add_argument("--mask_pattern", default=d.mask_pattern)
+    p.add_argument("--native_t1_pattern", default=d.native_t1_pattern)
+    p.add_argument("--surf_archive_pattern", default=d.surf_archive_pattern)
+    p.add_argument("--rigid_sampling", type=float, default=d.rigid_sampling)
+    p.add_argument("--rigid_ncc_min", type=float, default=d.rigid_ncc_min)
+    p.add_argument("--threads", type=int, default=d.threads)
     p.add_argument("--cache_dir", default=d.cache_dir)
     p.add_argument("--mni_template", default=d.mni_template)
     p.add_argument("--fsaverage_dir", default=d.fsaverage_dir)
@@ -316,8 +526,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-FIELDS = ("raw_root", "cache_dir", "mni_template", "fsaverage_dir", "elastix", "elastix_params",
-          "hemis", "surfaces", "n4_shrink", "n4_iterations", "z_outside", "workers", "limit")
+FIELDS = ("layout", "raw_root", "t1_pattern", "mask_pattern", "native_t1_pattern", "surf_archive_pattern",
+          "cache_dir", "mni_template", "fsaverage_dir", "elastix", "elastix_params",
+          "hemis", "surfaces", "n4_shrink", "n4_iterations", "z_outside", "workers", "limit",
+          "rigid_sampling", "rigid_ncc_min", "threads")
 
 
 def build_config(args) -> PreprocessConfig:
@@ -353,15 +565,19 @@ def run(cfg: PreprocessConfig) -> None:
     print(rec.summary())
 
     tpl = nib.load(c["mni_template"])
-    fixed_mask = os.path.join(cache, "elastix", "mni_brain_mask.nii.gz")
-    if not os.path.isfile(fixed_mask):
-        nib.save(template_nifti((np.asarray(tpl.dataobj) > 0).astype(np.uint8), tpl), fixed_mask)
+    if c["layout"] != "rigid_dataset":                 # the elastix fixed mask is only used there
+        fixed_mask = os.path.join(cache, "elastix", "mni_brain_mask.nii.gz")
+        if not os.path.isfile(fixed_mask):
+            nib.save(template_nifti((np.asarray(tpl.dataobj) > 0).astype(np.uint8), tpl), fixed_mask)
     for hemi in c["hemis"]:
         write_canonical(c, hemi)
 
-    subjects, skipped = find_subjects(c["raw_root"], c["hemis"])
-    print("%d subjects with FreeSurfer output, %d skipped (no T1 / mask / sphere.reg)"
-          % (len(subjects), len(skipped)))
+    if c["layout"] == "rigid_dataset":
+        subjects, skipped = find_subjects_rigid(c)
+    else:
+        subjects, skipped = find_subjects(c["raw_root"], c["hemis"])
+    print("%d subjects with all required files (layout %s), %d skipped"
+          % (len(subjects), c["layout"], len(skipped)))
     if c["limit"]:
         subjects = subjects[:c["limit"]]
     jobs = [(s, t1, m, sd, c) for s, t1, m, sd in subjects]

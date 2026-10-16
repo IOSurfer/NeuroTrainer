@@ -33,11 +33,39 @@ class PreprocessConfig(AbstractConfig):
 
     config_type = "Preprocess"
 
+    layout = ConfigField(
+        "neuropreprocess",
+        doc="neuropreprocess: <root>/<subject>/{T1/*.nii.gz, freesurfer_brainmask/, surf/}; N4 + "
+        "elastix affine to MNI152 | rigid_dataset: T1, brain mask and a surf.tar.gz per subject "
+        "(patterns below); the T1 is already rigidly in MNI152 space, so no N4 and no resampling; "
+        "the native-space surfaces are mapped into it by a rigid registration native T1 -> T1_Rigid",
+    )
     raw_root = ConfigField(
         r"D:\NeuroPreprocess\output",
-        doc="NeuroPreprocess output: <subject>/{T1/*.nii.gz, freesurfer_brainmask/, surf/}. "
-        "Subjects without FreeSurfer surfaces are skipped.",
+        doc="Raw data root, one folder per subject.  Subjects without the required files "
+        "(e.g. without FreeSurfer surfaces) are skipped.",
     )
+    t1_pattern = ConfigField(
+        "T1_Rigid/NIFTI/T1_Rigid.nii.gz",
+        doc="rigid_dataset: T1 on the MNI152 grid, relative to <raw_root>/<subject>/ ({subject} allowed)",
+    )
+    mask_pattern = ConfigField(
+        "FreeSurfer_Brainmask_Rigid/NIFTI/FreeSurfer_Brainmask_Rigid.nii.gz",
+        doc="rigid_dataset: brain mask on the same grid",
+    )
+    native_t1_pattern = ConfigField(
+        "T1/{subject}-T1.nii.gz",
+        doc="rigid_dataset: the native-space T1 the surfaces belong to (registration moving image)",
+    )
+    surf_archive_pattern = ConfigField(
+        "FreeSurfer_Surf/surf.tar.gz",
+        doc="rigid_dataset: FreeSurfer surf/ folder as a tar.gz (extracted per subject, then deleted)",
+    )
+    rigid_sampling = ConfigField(0.2, doc="rigid_dataset: fraction of voxels sampled by the metric")
+    rigid_ncc_min = ConfigField(
+        0.999, doc="rigid_dataset: a subject whose registered native T1 correlates less than this "
+        "with T1_Rigid is rejected (T1_Rigid is the native T1 under a rigid transform: ~1.0000)")
+    threads = ConfigField(2, doc="rigid_dataset: ITK threads per worker")
     cache_dir = ConfigField("./input/cortical_surface_flow/cache", doc="Where the cache is written")
     mni_template = ConfigField(
         r"D:\MNI152_T1_1mm_Brain.nii",
