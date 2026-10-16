@@ -198,6 +198,35 @@ correspondence error, correspondence-free fold detail, mesh quality, for the mod
 four predictors that ignore the T1 (source surface; source + mean normal offset, i.e.
 population thickness for white -> pial; source + mean displacement; mean target).
 
+## ONNX export
+
+```bat
+python -m apps.cortical_surface_flow.export_onnx --config_dir output/ixi_rigid_lh_white_pial ^
+    output/ixi_rigid_lh_orig_white output/ixi_rigid_rh_white_pial output/ixi_rigid_rh_orig_white
+::   -> output/<experiment>/onnx/<experiment>.onnx + .json   (best.pth; --checkpoint for another one)
+```
+
+The graph is the whole of `test.py`'s inference: T1 encoder, feature sampling at the vertices and the
+unrolled closed-loop Euler integration with the Kalman setpoint (`euler_steps` and `kalman_q_mm` from
+`control.json`, fixed at export; weights are shared between the ~100 unrolled steps, ~22k nodes, ~39 MB).
+
+| | shape | |
+|---|---|---|
+| in `t1` | (1, 1, 182, 218, 182) | network input: T1 z-scored inside the Brainmask, `z_outside` elsewhere |
+| in `x0_mm` | (N, 3) | source surface, MNI RAS mm, fsaverage 164k vertex order |
+| out `pred_mm` | (N, 3) | predicted surface, MNI RAS mm (same vertex order, same faces) |
+| out `sigma_normal_mm`, `sigma_tangential_mm` | (N,) | predicted posterior sigma |
+
+mm <-> normalised coordinates are inside the graph; N is dynamic, the grid is static.  The export
+finishes by running the graph in onnxruntime on the first test subject and comparing it with the PyTorch
+model (`--no_verify` skips it): max |difference| about 1e-3 mm.  Opset >= 20 (GridSample on 5-D volumes),
+onnxruntime >= 1.17.
+
+`nn.GroupNorm` is replaced by an axis-by-axis mean / variance (`StableGroupNorm`) for the export only.
+The exporter's own decomposition (InstanceNormalization) is exact in PyTorch but onnxruntime's float32
+sum over the ~14 M voxels of a full-resolution group is off by ~1 % of the activation scale, which showed
+up as ~3e-3 mm mean / 3e-2 mm max error in the predicted surface even after three steps.
+
 ## Validated result (lh white -> pial.T1, 163 / 20 / 20 IXI, 30 000 steps)
 
 Test, 12 subjects, Kalman setpoint (q = 1 mm):
