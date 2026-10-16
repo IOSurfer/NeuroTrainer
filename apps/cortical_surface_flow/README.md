@@ -202,23 +202,30 @@ population thickness for white -> pial; source + mean displacement; mean target)
 
 ```bat
 python -m apps.cortical_surface_flow.export_onnx --config_dir output/ixi_rigid_lh_white_pial ^
-    output/ixi_rigid_lh_orig_white output/ixi_rigid_rh_white_pial output/ixi_rigid_rh_orig_white
-::   -> output/<experiment>/onnx/<experiment>.onnx + .json   (best.pth; --checkpoint for another one)
+    --checkpoint output/ixi_rigid_lh_white_pial/checkpoints/lh-white2pial-t1-1.0.0.0-20261016.pth
+::   -> output/<experiment>/onnx/<experiment>.{encoder,estimator}.onnx + .json
+::      (--checkpoint defaults to checkpoints/best.pth; several --config_dir are exported one after another)
 ```
 
-The graph is the whole of `test.py`'s inference: T1 encoder, feature sampling at the vertices and the
-unrolled closed-loop Euler integration with the Kalman setpoint (`euler_steps` and `kalman_q_mm` from
-`control.json`, fixed at export; weights are shared between the ~100 unrolled steps, ~22k nodes, ~39 MB).
+Two graphs (`--layout split`, default); the closed-loop integration stays with the caller:
 
-| | shape | |
+| graph | in | out |
 |---|---|---|
-| in `t1` | (1, 1, 182, 218, 182) | network input: T1 z-scored inside the Brainmask, `z_outside` elsewhere |
-| in `x0_mm` | (N, 3) | source surface, MNI RAS mm, fsaverage 164k vertex order |
-| out `pred_mm` | (N, 3) | predicted surface, MNI RAS mm (same vertex order, same faces) |
-| out `sigma_normal_mm`, `sigma_tangential_mm` | (N,) | predicted posterior sigma |
+| `encoder` | `t1` (1, 1, 182, 218, 182): T1 z-scored inside the Brainmask, `z_outside` elsewhere | `f0` .. `f4`: the feature pyramid, run once per subject |
+| `estimator` | `x_mm` (N, 3) vertices in MNI RAS mm, `t` (1,) path time, `f0` .. `f4` | `mu_mm` (N, 3) posterior mean, `var_normal_mm2`, `var_tangential_mm2` (N,), `n_hat` (N, 3) |
 
-mm <-> normalised coordinates are inside the graph; N is dynamic, the grid is static.  The export
-finishes by running the graph in onnxruntime on the first test subject and comparing it with the PyTorch
+The caller runs `integrate_split` (export_onnx.py; C++: `CorticalSurfaceFlow.cpp`): at every one of `steps`
+Euler steps estimate at (x, t), fuse with the Kalman setpoint (q in mm) and move x by dt (m - x) / (1 - t).
+`euler_steps` and `kalman_q_mm` (from `control.json`) are only defaults, stored in the estimator's
+`metadata_props`.  The features are shared, so vertices can go through the estimator in chunks: the C++
+implementation needs 5.2 GB and 88 s per surface (10 physical cores), one estimator call per chunk of 32768
+vertices and step.  The graphs are small (encoder 682 nodes / 35 MB, estimator 185 nodes / 1.4 MB).
+
+`--layout unrolled` writes the earlier single graph `<experiment>.onnx` (t1, x0_mm -> pred_mm, sigmas) with
+all steps unrolled (~22k nodes): the same result, but steps and q are fixed at export and onnxruntime needs ~13 GB.
+
+mm <-> normalised coordinates are inside the graphs; N is dynamic, the grid is static.  The export
+finishes by running the graphs in onnxruntime on the first test subject and comparing them with the PyTorch
 model (`--no_verify` skips it): max |difference| about 1e-3 mm.  Opset >= 20 (GridSample on 5-D volumes),
 onnxruntime >= 1.17.
 
