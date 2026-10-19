@@ -203,15 +203,16 @@ population thickness for white -> pial; source + mean displacement; mean target)
 ```bat
 python -m apps.cortical_surface_flow.export_onnx --config_dir output/ixi_rigid_lh_white_pial ^
     --checkpoint output/ixi_rigid_lh_white_pial/checkpoints/lh-white2pial-t1-1.0.0.0-20261016.pth
-::   -> output/<experiment>/onnx/<experiment>.{encoder,estimator}.onnx + .json
-::      (--checkpoint defaults to checkpoints/best.pth; several --config_dir are exported one after another)
+::   -> output/<experiment>/onnx/lh-white2pial-t1-1.0.0.0-20261016.{encoder,estimator}.onnx + .json
+::      (named after the checkpoint, after the experiment for best.pth / latest.pth, which is also the
+::      default --checkpoint; several --config_dir without --checkpoint are exported one after another)
 ```
 
 Two graphs (`--layout split`, default); the closed-loop integration stays with the caller:
 
 | graph | in | out |
 |---|---|---|
-| `encoder` | `t1` (1, 1, 182, 218, 182): T1 z-scored inside the Brainmask, `z_outside` elsewhere | `f0` .. `f4`: the feature pyramid, run once per subject |
+| `encoder` | `t1` (1, 1, 182, 218, 182): T1 z-scored inside the Brainmask, `z_outside` elsewhere | `f0` .. `f4`: the feature pyramid, run once per subject; channels last, (D·H·W, C) per level (`--sampler gather`) |
 | `estimator` | `x_mm` (N, 3) vertices in MNI RAS mm, `t` (1,) path time, `f0` .. `f4` | `mu_mm` (N, 3) posterior mean, `var_normal_mm2`, `var_tangential_mm2` (N,), `n_hat` (N, 3) |
 
 The caller runs `integrate_split` (export_onnx.py; C++: `CorticalSurfaceFlow.cpp`): at every one of `steps`
@@ -220,6 +221,19 @@ Euler steps estimate at (x, t), fuse with the Kalman setpoint (q in mm) and move
 `metadata_props`.  The features are shared, so vertices can go through the estimator in chunks: the C++
 implementation needs 5.2 GB and 88 s per surface (10 physical cores), one estimator call per chunk of 32768
 vertices and step.  The graphs are small (encoder 682 nodes / 35 MB, estimator 185 nodes / 1.4 MB).
+
+**Sampling the features without GridSample.**  The estimator samples the pyramid at the vertices (trilinear, border
+values outside).  `--sampler gather` (default) does it with eight Gather'd corners per level, `--sampler grid_sample`
+with the 5-D `GridSample`, the same function (max difference ~1e-5 on random features, also outside the grid).
+5-D `GridSample` needs opset >= 20, and onnxruntime's CUDA provider has no kernel for opset >= 20 (its kernel stops at
+opset 19 and 4-D; opset 23 is no better), so the node runs on the CPU and the GPU waits for it: 136 ms per estimator
+call (32768 vertices), 120 ms of it in `GridSample`; the Gather version takes 15 ms.
+
+**GPU precision.**  Run the estimator in float32 (`ModelConfig::allowTf32 = false` in C++, `use_tf32=0` in the
+provider options): its Gemms in TF32 moved the vertices by 0.07 mm on average and 0.5 mm at most against the CPU
+after 10 steps.  The encoder may use TF32 (features off by 3e-4, vertices by 2e-4 mm).  C++ on a GPU (RTX 5060 Ti):
+17 s per surface with all vertices in one estimator call (every call copies the ~600 MB pyramid to the GPU, five
+chunks of 32768 take 50 s), CPU 88 s.
 
 `--layout unrolled` writes the earlier single graph `<experiment>.onnx` (t1, x0_mm -> pred_mm, sigmas) with
 all steps unrolled (~22k nodes): the same result, but steps and q are fixed at export and onnxruntime needs ~13 GB.

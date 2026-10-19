@@ -6,7 +6,8 @@ Two layouts (``--layout``)
 split (default) -- two graphs, the integration loop stays outside
     <name>.encoder.onnx    t1 (1, 1, D, H, W)  network input on the cache's MNI grid: T1 z-scored inside
                                                the Brainmask, ``z_outside`` elsewhere (dataset.normalize_t1_torch)
-                           -> f0 .. f4         the feature pyramid (run once per subject)
+                           -> f0 .. f4         the feature pyramid (run once per subject); channels last and
+                                               flattened, (D_l * H_l * W_l, C_l), with ``--sampler gather``
     <name>.estimator.onnx  x_mm (N, 3)         vertices, MNI RAS mm
                            t (1,)              path time in [0, 1)
                            f0 .. f4            the encoder's outputs
@@ -16,6 +17,11 @@ split (default) -- two graphs, the integration loop stays outside
     The caller integrates (reference: ``integrate_split`` below, ClosedLoopFlow.integrate in model.py):
         x = x0; dt = 1 / steps
         for i in range(steps): estimate at (x, i dt); fuse with the Kalman setpoint; x += dt (m - x) / (1 - i dt)
+    The estimator samples the pyramid at the vertices (trilinear, border values outside) either with eight Gather
+    corners per level (``--sampler gather``, default) or with GridSample (``--sampler grid_sample``, features
+    (1, C, D, H, W)).  Both are the same function (max difference ~1e-5), but onnxruntime's CUDA provider has no
+    kernel for 5-D GridSample (opset >= 20; its kernel stops at opset 19 and 4-D), so the node falls back to the
+    CPU and the estimator is ~9x slower on a GPU.
     ``euler_steps`` and ``kalman_q_mm`` are default run time settings in the estimator's metadata_props, so the
     caller can change them; vertices can be processed in chunks (features are shared), which bounds the memory.
 
@@ -34,6 +40,10 @@ Usage
 
     -> output/<experiment>/onnx/   (best.pth; --checkpoint for another one)
 
+Files are named after the checkpoint (``lh-white2pial-t1-1.0.0.0-20261016.pth`` ->
+``lh-white2pial-t1-1.0.0.0-20261016.encoder.onnx`` / ``.estimator.onnx`` / ``.json``), after the experiment
+directory for best.pth / latest.pth.
+
 After the export the graphs are run with onnxruntime on the first test subject and compared
 with the PyTorch model (``--no_verify`` skips this; needs the cache).
 
@@ -46,6 +56,7 @@ Notes
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import json
 import logging
@@ -61,6 +72,7 @@ import torch.nn as nn
 
 from configuration.manager import ConfigManager
 from apps.cortical_surface_flow.geometry import GridFrame, utf8_stdout
+import apps.cortical_surface_flow.model as flow_model
 from apps.cortical_surface_flow.model import build_model, set_kalman
 
 log = logging.getLogger("export_onnx")
@@ -130,14 +142,55 @@ class SurfaceFlowONNX(nn.Module):
 
 
 class EncoderONNX(nn.Module):
-    """T1 network input -> the feature pyramid (one tensor per level)."""
+    """T1 network input -> the feature pyramid (one tensor per level): (1, C, D, H, W), or with ``channels_last``
+    (D * H * W, C) for the Gather sampler."""
 
-    def __init__(self, model: nn.Module) -> None:
+    def __init__(self, model: nn.Module, channels_last: bool = False) -> None:
         super().__init__()
-        self.model = model
+        self.model, self.channels_last = model, channels_last
 
     def forward(self, t1):
-        return tuple(self.model.encode(t1[0, 0]))
+        feats = self.model.encode(t1[0, 0])
+        if self.channels_last:
+            return tuple(f[0].reshape(f.shape[1], -1).t().contiguous() for f in feats)
+        return tuple(feats)
+
+
+def gather_sampler(shapes):
+    """``model.sample_pyramid`` (bilinear grid_sample, border padding, align_corners) from eight gathered corners per
+    level; the features are channels last, (D_l * H_l * W_l, C_l).  Only ops that onnxruntime's CUDA provider has."""
+
+    def sample(feats, x, norm2vox):
+        idx = x @ norm2vox[:3, :3].T + norm2vox[:3, 3]
+        out = []
+        for level, (f, (d, h, w)) in enumerate(zip(feats, shapes)):
+            hi = torch.tensor([d - 1, h - 1, w - 1], dtype=x.dtype, device=x.device)
+            j = torch.minimum(torch.clamp(idx / 2 ** level, min=0.0), hi)        # level voxel j sits on index 2^l j
+            i0 = torch.floor(j)
+            w1 = j - i0
+            w0 = 1.0 - w1
+            a0 = i0.long()
+            a1 = torch.minimum(a0 + 1, hi.long())
+            acc = 0
+            for ia, wa in ((a0[:, 0], w0[:, 0]), (a1[:, 0], w1[:, 0])):
+                for ib, wb in ((a0[:, 1], w0[:, 1]), (a1[:, 1], w1[:, 1])):
+                    for ic, wc in ((a0[:, 2], w0[:, 2]), (a1[:, 2], w1[:, 2])):
+                        acc = acc + f[(ia * h + ib) * w + ic] * (wa * wb * wc)[:, None]
+            out.append(acc)
+        return torch.cat(out, -1)
+
+    return sample
+
+
+@contextlib.contextmanager
+def patched_sampler(sampler):
+    """Trace the model with another ``sample_pyramid`` (the estimator calls it through the model module)."""
+    original = flow_model.sample_pyramid
+    flow_model.sample_pyramid = sampler
+    try:
+        yield
+    finally:
+        flow_model.sample_pyramid = original
 
 
 class EstimatorONNX(nn.Module):
@@ -200,6 +253,13 @@ def _load(config_dir: str, checkpoint: Optional[str], euler_steps: Optional[int]
     for p in model.parameters():
         p.requires_grad_(False)
     return dc, mc, frame, model, ck, checkpoint, steps, q
+
+
+def _release_name(config_dir: str, checkpoint: str) -> str:
+    """File name stem of the exports: the checkpoint's (``lh-white2pial-t1-1.0.0.0-20261016``), the experiment's for
+    the training checkpoints best.pth / latest.pth."""
+    stem = Path(checkpoint).stem
+    return os.path.basename(os.path.normpath(config_dir)) if stem in ("best", "latest") else stem
 
 
 def _metadata(name, dc, mc, frame, ck, checkpoint, steps, q, opset) -> dict:
@@ -315,43 +375,49 @@ def _finish(path, meta, extra=None) -> None:
 def export_split(config_dir: str, checkpoint: Optional[str] = None, output_dir: Optional[str] = None,
                  opset: int = 20, euler_steps: Optional[int] = None, kalman_q_mm: Optional[float] = None,
                  device: str = "cpu", verify: bool = True, verify_subject: Optional[str] = None,
-                 verify_device: str = "auto") -> str:
+                 verify_device: str = "auto", sampler: str = "gather", verify_steps: int = 10) -> str:
     dev = torch.device(device)
     dc, mc, frame, model, ck, checkpoint, steps, q = _load(config_dir, checkpoint, euler_steps, kalman_q_mm, dev)
-    name = os.path.basename(os.path.normpath(config_dir))
+    experiment = os.path.basename(os.path.normpath(config_dir))
+    name = _release_name(config_dir, checkpoint)
     out = Path(output_dir or os.path.join(config_dir, "onnx"))
     out.mkdir(parents=True, exist_ok=True)
     enc_path, est_path = out / ("%s.encoder.onnx" % name), out / ("%s.estimator.onnx" % name)
-    log.info("%s | %s | step %s | split layout, %d Euler steps | Kalman %s | opset %d | %s"
-             % (name, "%s.%s -> %s" % (dc.hemi, dc.source_surface, dc.target_surface), ck.get("step"), steps,
+    log.info("%s | %s | step %s | split layout, %s sampler, %d Euler steps | Kalman %s | opset %d | %s"
+             % (name, "%s.%s -> %s" % (dc.hemi, dc.source_surface, dc.target_surface), ck.get("step"), sampler, steps,
                 ("q=%.2f mm" % q) if q else "off", opset, frame))
     if not model.use_t1:
         raise SystemExit("%s was trained without the T1 (--no_t1): nothing to feed the t1 input" % name)
 
-    wrapper = SurfaceFlowONNX(model, frame, steps).to(dev).eval()              # PyTorch reference
+    vsteps = min(steps, verify_steps)                                          # the check needs few steps
+    wrapper = SurfaceFlowONNX(model, frame, vsteps).to(dev).eval()             # PyTorch reference
     stable = _stable_norms(copy.deepcopy(model))
-    encoder = EncoderONNX(stable).to(dev).eval()
+    gather = sampler == "gather"
+    encoder = EncoderONNX(stable, channels_last=gather).to(dev).eval()
     estimator = EstimatorONNX(stable, frame).to(dev).eval()
     t1 = torch.zeros(1, 1, *frame.shape, device=dev)
     t0 = time.time()
     with torch.no_grad():
+        shapes = [tuple(f.shape[2:]) for f in stable.encode(t1[0, 0])]
         feats = encoder(t1)
         if len(feats) != LEVELS:
             raise SystemExit("the estimator export expects %d pyramid levels, the encoder has %d" % (LEVELS, len(feats)))
         torch.onnx.export(encoder, (t1,), str(enc_path), export_params=True, opset_version=opset,
                           do_constant_folding=True, input_names=["t1"], output_names=FEATURES, dynamo=False)
         x = torch.zeros(4096, 3, device=dev)                  # trace size only; N is dynamic
-        torch.onnx.export(estimator, (x, torch.zeros(1, device=dev), *feats), str(est_path), export_params=True,
-                          opset_version=opset, do_constant_folding=True, input_names=EST_INPUTS,
-                          output_names=EST_OUTPUTS, dynamo=False,
-                          dynamic_axes={"x_mm": {0: "n_vertices"}, **{o: {0: "n_vertices"} for o in EST_OUTPUTS}})
+        with patched_sampler(gather_sampler(shapes)) if gather else contextlib.nullcontext():
+            torch.onnx.export(estimator, (x, torch.zeros(1, device=dev), *feats), str(est_path), export_params=True,
+                              opset_version=opset, do_constant_folding=True, input_names=EST_INPUTS,
+                              output_names=EST_OUTPUTS, dynamo=False,
+                              dynamic_axes={"x_mm": {0: "n_vertices"}, **{o: {0: "n_vertices"} for o in EST_OUTPUTS}})
     log.info("traced and wrote %s, %s (%.0f s)" % (enc_path.name, est_path.name, time.time() - t0))
 
-    meta = _metadata(name, dc, mc, frame, ck, checkpoint, steps, q, opset)
-    meta["layout"] = "split"
+    meta = _metadata(experiment, dc, mc, frame, ck, checkpoint, steps, q, opset)
+    meta["release"], meta["layout"], meta["sampler"] = name, "split", sampler
     meta["inputs"] = {"encoder.t1": meta["inputs"]["t1"],
                       "estimator": "x_mm (N, 3) MNI RAS mm, t (1,), f0..f4 of the encoder"}
-    meta["outputs"] = {"encoder": "f0..f4, the feature pyramid",
+    meta["outputs"] = {"encoder": "f0..f4, the feature pyramid, %s" % (
+                           "channels last (D*H*W, C)" if gather else "(1, C, D, H, W)"),
                        "estimator": "mu_mm (N, 3), var_normal_mm2 (N,), var_tangential_mm2 (N,), n_hat (N, 3)"}
     _finish(enc_path, meta)
     _finish(est_path, meta, {"euler_steps": steps, "kalman_q_mm": q or 0.0})
@@ -359,8 +425,9 @@ def export_split(config_dir: str, checkpoint: Optional[str] = None, output_dir: 
     if verify:
         rd = torch.device("cuda" if verify_device == "auto" and torch.cuda.is_available() else
                           ("cpu" if verify_device == "auto" else verify_device))
-        meta["verification"] = _verify_split(str(enc_path), str(est_path), wrapper, dc, frame, steps, q,
+        meta["verification"] = _verify_split(str(enc_path), str(est_path), wrapper, dc, frame, vsteps, q,
                                              verify_subject, rd)
+        meta["verification"]["euler_steps"] = vsteps
     with open(out / ("%s.json" % name), "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=1)
     return str(est_path)
@@ -374,7 +441,8 @@ def export(config_dir: str, checkpoint: Optional[str] = None, output_dir: Option
 
     dev = torch.device(device)
     dc, mc, frame, model, ck, checkpoint, steps, q = _load(config_dir, checkpoint, euler_steps, kalman_q_mm, dev)
-    name = os.path.basename(os.path.normpath(config_dir))
+    experiment = os.path.basename(os.path.normpath(config_dir))
+    name = _release_name(config_dir, checkpoint)
     out = Path(output_dir or os.path.join(config_dir, "onnx"))
     out.mkdir(parents=True, exist_ok=True)
     path = out / ("%s.onnx" % name)
@@ -398,7 +466,8 @@ def export(config_dir: str, checkpoint: Optional[str] = None, output_dir: Option
                           dynamo=False)
     log.info("traced and wrote %s (%.0f s)" % (path, time.time() - t0))
 
-    meta = _metadata(name, dc, mc, frame, ck, checkpoint, steps, q, opset)
+    meta = _metadata(experiment, dc, mc, frame, ck, checkpoint, steps, q, opset)
+    meta["release"], meta["layout"] = name, "unrolled"
     proto = onnx.load(str(path))
     onnx.checker.check_model(proto)
     entry = proto.metadata_props.add()
@@ -424,6 +493,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     p.add_argument("--output_dir", default=None, help="Default: <config_dir>/onnx")
     p.add_argument("--layout", default="split", choices=["split", "unrolled"],
                    help="split: encoder + estimator graphs, the caller integrates; unrolled: one graph, steps fixed")
+    p.add_argument("--sampler", default="gather", choices=["gather", "grid_sample"],
+                   help="split layout: how the estimator samples the features. gather runs on the GPU, GridSample "
+                        "(5-D, opset >= 20) has no CUDA kernel in onnxruntime and falls back to the CPU")
     p.add_argument("--opset", type=int, default=20, help="GridSample on 5-D input needs >= 20")
     p.add_argument("--euler_steps", type=int, default=None, help="Default: ControlConfig.euler_steps")
     p.add_argument("--kalman_q_mm", type=float, default=None,
@@ -431,6 +503,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     p.add_argument("--device", default="cpu", choices=["cpu", "cuda"], help="Device used for tracing")
     p.add_argument("--no_verify", action="store_true", help="Skip the onnxruntime vs PyTorch comparison")
     p.add_argument("--verify_subject", default=None, help="Default: first test subject")
+    p.add_argument("--verify_steps", type=int, default=10,
+                   help="split layout: Euler steps of the onnxruntime vs PyTorch comparison (the exported default is unchanged)")
     p.add_argument("--verify_device", default="auto", choices=["auto", "cpu", "cuda"],
                    help="Device of the PyTorch reference")
     a = p.parse_args(argv)
@@ -439,8 +513,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
                         handlers=[logging.StreamHandler(sys.stdout)])
     for d in a.config_dir:
-        (export_split if a.layout == "split" else export)(d, a.checkpoint, a.output_dir, a.opset, a.euler_steps, a.kalman_q_mm, a.device,
-               not a.no_verify, a.verify_subject, a.verify_device)
+        args = (d, a.checkpoint, a.output_dir, a.opset, a.euler_steps, a.kalman_q_mm, a.device, not a.no_verify,
+                a.verify_subject, a.verify_device)
+        export_split(*args, sampler=a.sampler, verify_steps=a.verify_steps) if a.layout == "split" else export(*args)
 
 
 if __name__ == "__main__":
