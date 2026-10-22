@@ -197,6 +197,12 @@ class LossConfig(AbstractConfig):
     ce_weight = ConfigField(0.5, doc="Cross-entropy term weight in dice_ce")
     focal_gamma = ConfigField(2.0, doc="Focal loss focusing parameter γ (focal / dice_focal only)")
     focal_weight = ConfigField(0.5, doc="Focal term weight in dice_focal")
+    focal_ignore_background = ConfigField(
+        True,
+        doc="True: the focal term only looks at foreground voxels (and so does Dice), nothing supervises the background output -- fine when "
+        "fine-tuning a model whose head already handles the background, but a randomly initialised head then predicts arbitrary classes "
+        "for the background. False: the focal term also covers the background voxels (normalised by the foreground voxel count).",
+    )
     class_weights = ConfigField(
         None,
         doc="Per-class loss weights as a list [w0, w1, ...] in class-index order "
@@ -246,6 +252,12 @@ class InfraConfig(AbstractConfig):
     output_dir = ConfigField("./output")
     experiment_name = ConfigField("labelmap_seg")
     num_workers = ConfigField(4)
+    prefetch_factor = ConfigField(
+        2,
+        doc="Batches each training DataLoader worker prepares ahead. The loader hands out batches in order, so one slow sample (e.g. a 25 s "
+        "elastic deformation of a multi-channel soft label) stalls the GPU unless the buffer is deeper than that delay; raise it for that case "
+        "(a prefetched batch is ~140 MB of shared memory)",
+    )
     device = ConfigField("auto", doc="auto | cpu | cuda")
     seed = ConfigField(42)
     resume = ConfigField(None, doc="Checkpoint file path to resume from")

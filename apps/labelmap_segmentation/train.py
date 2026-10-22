@@ -199,6 +199,12 @@ def parse_args() -> argparse.Namespace:
         help="Focal term weight in dice_focal (alongside --dice_weight)",
     )
     g.add_argument(
+        "--focal_include_background",
+        action="store_true",
+        help="Let the focal term cover the background voxels too (default: foreground voxels only). Needed when the output head "
+        "is trained from scratch, otherwise nothing supervises the background class",
+    )
+    g.add_argument(
         "--class_weights",
         type=float,
         nargs="+",
@@ -332,6 +338,7 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     lc.ce_weight = args.ce_weight
     lc.focal_gamma = args.focal_gamma
     lc.focal_weight = args.focal_weight
+    lc.focal_ignore_background = not args.focal_include_background
     lc.class_weights = list(args.class_weights) if args.class_weights else None
 
     oc = OptimizerConfig()
@@ -614,9 +621,11 @@ class Trainer:
         if c.type == "dice_ce":
             return DiceCELoss(n, c.dice_weight, c.ce_weight)
         if c.type == "focal":
-            return FocalLoss(n, gamma=c.focal_gamma, alpha=alpha).to(self.device)
+            return FocalLoss(n, gamma=c.focal_gamma, alpha=alpha, ignore_background=c.focal_ignore_background).to(self.device)
         if c.type == "dice_focal":
-            return DiceFocalLoss(n, c.dice_weight, c.focal_weight, c.focal_gamma, alpha).to(self.device)
+            return DiceFocalLoss(
+                n, c.dice_weight, c.focal_weight, c.focal_gamma, alpha, focal_ignore_background=c.focal_ignore_background
+            ).to(self.device)
         # ce
         if n == 1:
             return nn.BCEWithLogitsLoss()
@@ -700,12 +709,11 @@ class Trainer:
         )
         target = y
         if self.data_cfg.soft_label_sigma:
-            soft = batch[soft_label_name(self.data_cfg.label_name)][tio.DATA].to(self.device)
-            # Augmentation pads with 0 in every channel and blends linearly at the rim: renormalise to a distribution, background where empty
-            soft = soft.clamp_min(0.0)
-            total = soft.sum(dim=1, keepdim=True)
-            target = soft / total.clamp_min(1e-3)
-            target[:, :1] += (total < 1e-3).float()
+            # foreground probabilities arrive as uint8; the background is whatever probability is left (the zero padding of the
+            # spatial augmentations is background), and the quantisation noise must not push the sum above 1
+            foreground = batch[soft_label_name(self.data_cfg.label_name)][tio.DATA].to(self.device).float() / 255.0
+            foreground = foreground / foreground.sum(dim=1, keepdim=True).clamp_min(1.0)
+            target = torch.cat([1.0 - foreground.sum(dim=1, keepdim=True), foreground], dim=1)
         return x, y, target
 
     def _forward(self, x: torch.Tensor, y: torch.Tensor):
@@ -877,6 +885,10 @@ class Trainer:
                 accum[k] += v
             n += 1
 
+        if self.device.type == "cuda":
+            # the full-volume validation pass leaves large cached blocks behind; on a GPU that is nearly full they fragment the
+            # allocator and make Windows page GPU memory out, which stalls the next training steps
+            torch.cuda.empty_cache()
         return {k: v / n for k, v in accum.items()} if n else accum
 
     # ── TensorBoard logging ───────────────────────────────────────────────────

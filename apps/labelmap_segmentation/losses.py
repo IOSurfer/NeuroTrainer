@@ -110,7 +110,10 @@ class FocalLoss(nn.Module):
         if self.ignore_background:
             fg = (t_long != 0).float()
             return (focal_w * ce * fg).sum() / (fg.sum() + 1e-5)
-        return (focal_w * ce).mean()
+        # Background voxels take part (with their class weight): without them nothing supervises the background output, which is then
+        # arbitrary (large false-positive regions). Normalised by the number of foreground voxels, as in RetinaNet -- easy background
+        # voxels have a focal weight near 0, so only the background that is mistaken for foreground adds to the loss.
+        return (focal_w * ce).sum() / ((t_long != 0).sum() + 1e-5)
 
     def _soft_forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -126,7 +129,7 @@ class FocalLoss(nn.Module):
         if self.ignore_background:
             support = (targets[:, 0] < 0.999).float()
             return (per_voxel * support).sum() / (support.sum() + 1e-5)
-        return per_voxel.mean()
+        return per_voxel.sum() / ((1.0 - targets[:, 0]).sum() + 1e-5)  # all voxels, normalised by the foreground mass (see the hard-label branch)
 
 
 class DiceFocalLoss(nn.Module):
@@ -141,10 +144,14 @@ class DiceFocalLoss(nn.Module):
         alpha: Optional[List[float]] = None,
         smooth: float = 1e-5,
         ignore_background: bool = True,
+        focal_ignore_background: Optional[bool] = None,
     ) -> None:
         super().__init__()
+        # ``ignore_background`` is the Dice setting; the focal term follows it unless ``focal_ignore_background`` says otherwise
         self.dice = DiceLoss(num_classes, smooth, ignore_background)
-        self.focal = FocalLoss(num_classes, gamma, alpha, ignore_background)
+        self.focal = FocalLoss(
+            num_classes, gamma, alpha, ignore_background if focal_ignore_background is None else focal_ignore_background
+        )
         self.dice_weight = dice_weight
         self.focal_weight = focal_weight
         self.num_classes = num_classes

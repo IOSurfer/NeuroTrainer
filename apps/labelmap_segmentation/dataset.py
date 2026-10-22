@@ -172,17 +172,22 @@ class ZeroOutsideMask(tio.Transform):
     value; all other voxels are set to ``fill_value`` (default 0). Intended
     to run after intensity normalization (see ``DataConfig.foreground_mask_name``
     and ``DataConfig.background_fill_value``).
+
+    ``image_names`` restricts the filling to those images (default: every intensity
+    image), e.g. to keep a soft label out of it.
     """
 
-    def __init__(self, mask_name: str, fill_value: float = 0.0, **kwargs) -> None:
+    def __init__(self, mask_name: str, fill_value: float = 0.0, image_names: Optional[Sequence[str]] = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.mask_name = mask_name
         self.fill_value = fill_value
-        self.args_names = ["mask_name", "fill_value"]
+        self.image_names = list(image_names) if image_names else None
+        self.args_names = ["mask_name", "fill_value", "image_names"]
 
     def apply_transform(self, subject: tio.Subject) -> tio.Subject:
         mask = subject[self.mask_name].data != 0
-        for image in subject.get_images(intensity_only=True):
+        images = [subject[n] for n in self.image_names] if self.image_names else subject.get_images(intensity_only=True)
+        for image in images:
             image.set_data(torch.where(mask, image.data, torch.full_like(image.data, self.fill_value)))
         return subject
 
@@ -194,11 +199,12 @@ def soft_label_name(label_name: str) -> str:
 
 class SoftLabel(tio.Transform):
     """
-    Add a soft version of a labelmap as an extra *intensity* image of shape ``[num_classes, D, H, W]``.
+    Add a soft version of a labelmap as an extra *intensity* image of shape ``[num_classes - 1, D, H, W]``.
 
-    Channel ``c`` is the one-hot mask of class ``c`` smoothed by a Gaussian (``sigma_mm`` in mm, converted
-    to voxels with the label's spacing, kernel radius ``truncate * sigma``); channels sum to 1 everywhere.
-    The hard labelmap is kept untouched (metrics, foreground masks).
+    Channel ``c - 1`` is the one-hot mask of foreground class ``c`` smoothed by a Gaussian (``sigma_mm`` in mm,
+    converted to voxels with the label's spacing, kernel radius ``truncate * sigma``). The background probability
+    is not stored: it is ``1 - sum(channels)``, which also makes the zero padding of the spatial augmentations
+    background. The hard labelmap is kept untouched (metrics, foreground masks).
 
     The soft label is a ScalarImage on purpose: torchio resamples ScalarImages linearly and LabelMaps with
     nearest neighbour, so the spatial augmentations (affine, elastic) interpolate the soft label linearly
@@ -227,7 +233,7 @@ class SoftLabel(tio.Transform):
         sigma_mm = np.broadcast_to(np.asarray(self.sigma_mm, dtype=float), (3,))
         sigma_vox = sigma_mm / np.asarray(label.spacing, dtype=float)
 
-        soft = torch.zeros((self.num_classes, *hard.shape), dtype=torch.float32)
+        soft = torch.zeros((self.num_classes - 1, *hard.shape), dtype=torch.float32)
         foreground = hard > 0
         if foreground.any():
             # only the neighbourhood of the foreground can differ from 0: smooth inside its bounding box plus the kernel radius
@@ -240,16 +246,51 @@ class SoftLabel(tio.Transform):
             for c in range(1, self.num_classes):
                 if (crop == c).any():
                     smoothed = gaussian_filter((crop == c).astype(np.float32), sigma_vox, truncate=self.truncate, mode="constant")
-                    soft[(c, *box)] = torch.from_numpy(smoothed)
-        soft[0] = (1.0 - soft[1:].sum(dim=0)).clamp_(min=0.0)  # the smoothed background mask
+                    soft[(c - 1, *box)] = torch.from_numpy(smoothed)
         subject.add_image(tio.ScalarImage(tensor=soft, affine=label.affine), soft_label_name(self.label_name))
         return subject
 
 
-def get_preprocessing_transform() -> tio.Compose:
+class QuantizeSoftLabel(tio.Transform):
+    """
+    Store the soft label as uint8 (probability * 255) once every spatial augmentation has interpolated it in float: a 5x smaller
+    payload for the DataLoader workers. The trainer turns it back into a float probability map on the GPU.
+    """
+
+    def __init__(self, label_name: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.label_name = label_name
+        self.args_names = ["label_name"]
+
+    def apply_transform(self, subject: tio.Subject) -> tio.Subject:
+        image = subject[soft_label_name(self.label_name)]
+        image.set_data((image.data.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8))
+        return subject
+
+
+def get_foreground_fill_transform() -> tio.Compose:
+    """The foreground masking of ``get_preprocessing_transform(defer_fill=True)``: fills the input modalities (only them) outside the mask."""
+    dcfg: DataConfig = ConfigManager.get().get_config(ConfigManager.DATA)
+    if not dcfg.foreground_mask_name:
+        return tio.Compose([])
+    return tio.Compose([ZeroOutsideMask(dcfg.foreground_mask_name, fill_value=dcfg.background_fill_value, image_names=dcfg.modalities)])
+
+
+def get_finalize_transform() -> tio.Compose:
+    """Runs after the augmentations (train) / the preprocessing (validation, test): quantises the soft label."""
+    dcfg: DataConfig = ConfigManager.get().get_config(ConfigManager.DATA)
+    return tio.Compose([QuantizeSoftLabel(dcfg.label_name)] if dcfg.soft_label_sigma else [])
+
+
+def get_preprocessing_transform(defer_fill: bool = False) -> tio.Compose:
     """
     Build the preprocessing pipeline from ``DataConfig``.
-    Order: Resample -> CropOrPad -> Intensity Normalization -> Foreground masking.
+    Order: Resample -> CropOrPad -> Intensity Normalization -> Foreground masking -> soft label.
+
+    With ``defer_fill`` the foreground masking is left out; ``get_foreground_fill_transform`` then has to run
+    after the augmentations. The spatial augmentations pad with the image minimum, which is only the background
+    value when that value is the lowest one (-10), so filling afterwards keeps the padding and the background identical
+    whatever ``background_fill_value`` is.
     """
     dcfg: DataConfig = ConfigManager.get().get_config(ConfigManager.DATA)
     transforms = []
@@ -265,7 +306,7 @@ def get_preprocessing_transform() -> tio.Compose:
         transforms.append(tio.ZNormalization(masking_method=dcfg.znorm_mask_name))
     elif dcfg.normalization == "rescale":
         transforms.append(tio.RescaleIntensity(out_min_max=(0.0, 1.0)))
-    if dcfg.foreground_mask_name:
+    if dcfg.foreground_mask_name and not defer_fill:
         transforms.append(ZeroOutsideMask(dcfg.foreground_mask_name, fill_value=dcfg.background_fill_value))
     if dcfg.soft_label_sigma:
         transforms.append(SoftLabel(dcfg.label_name, dcfg.num_classes, dcfg.soft_label_sigma, dcfg.soft_label_truncate))
@@ -354,9 +395,12 @@ def create_labelmap_segmentation_datasets() -> (
     label_name = dcfg.label_name
     mask_names = [dcfg.znorm_mask_name, dcfg.foreground_mask_name, dcfg.crop_mask_name]
 
-    preprocess = get_preprocessing_transform()
+    preprocess = get_preprocessing_transform(defer_fill=True)
     augment = get_augmentation_transform()
-    train_tf = tio.Compose([preprocess, augment]) if acfg.enabled else preprocess
+    fill = get_foreground_fill_transform()
+    finalize = get_finalize_transform()
+    train_tf = tio.Compose([preprocess, augment, fill, finalize]) if acfg.enabled else tio.Compose([preprocess, fill, finalize])
+    eval_tf = tio.Compose([preprocess, fill, finalize])
 
     train_subjects = build_labelmap_segmentation_subjects(
         data_root / "train", modalities, label_name, mask_names=mask_names
@@ -367,7 +411,7 @@ def create_labelmap_segmentation_datasets() -> (
             build_labelmap_segmentation_subjects(
                 data_root / "validation", modalities, label_name, mask_names=mask_names
             ),
-            transform=preprocess,
+            transform=eval_tf,
         ),
         tio.SubjectsDataset(
             build_labelmap_segmentation_subjects(
@@ -377,7 +421,7 @@ def create_labelmap_segmentation_datasets() -> (
                 require_label=True,
                 mask_names=mask_names,
             ),
-            transform=preprocess,
+            transform=eval_tf,
         ),
     )
 
@@ -442,6 +486,8 @@ def create_data_loaders(
             shuffle=True,
             num_workers=icfg.num_workers,
             pin_memory=False,
+            persistent_workers=icfg.num_workers > 0,  # spawning the workers every epoch is slow on Windows
+            prefetch_factor=icfg.prefetch_factor if icfg.num_workers > 0 else None,
         ),
         DataLoader(
             val_dataset,
