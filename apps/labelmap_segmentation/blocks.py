@@ -9,6 +9,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,9 @@ def _GroupNorm(channels: int) -> nn.GroupNorm:
 
 
 class DoubleConv(nn.Module):
+    # Set by ``UNet3D.set_checkpointing``: recompute the block in the backward pass instead of storing its activations
+    use_checkpoint: bool = False
+
     def __init__(self, in_ch: int, out_ch: int, mid_ch: Optional[int] = None) -> None:
         super().__init__()
         if mid_ch is None:
@@ -39,6 +43,8 @@ class DoubleConv(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.use_checkpoint and self.training and torch.is_grad_enabled():
+            return checkpoint(self.block, x, use_reentrant=False)
         return self.block(x)
 
 

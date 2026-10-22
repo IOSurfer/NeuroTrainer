@@ -5,6 +5,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def is_soft_target(targets: torch.Tensor, num_classes: int) -> bool:
+    """True for a per-class probability target [B, C, D, H, W] (soft label) as opposed to integer labels [B, 1, D, H, W]."""
+    return num_classes > 1 and targets.is_floating_point() and targets.dim() == 5 and targets.shape[1] == num_classes
+
+
 class DiceLoss(nn.Module):
     """Soft Dice loss, optionally ignoring the background class."""
 
@@ -30,15 +35,18 @@ class DiceLoss(nn.Module):
             )
 
         probs = F.softmax(logits, dim=1)
-        t_long = targets.squeeze(1).long()
-        t_max = int(t_long.max().item())
-        if t_max >= self.num_classes:
-            raise ValueError(
-                f"DiceLoss: label value {t_max} is out of range for "
-                f"num_classes={self.num_classes} (valid: 0–{self.num_classes - 1}). "
-                f"Unique values in this batch: {t_long.unique().cpu().tolist()}"
-            )
-        t_oh = F.one_hot(t_long, self.num_classes).permute(0, 4, 1, 2, 3).float()
+        if is_soft_target(targets, self.num_classes):
+            t_oh = targets.float()  # soft Dice: the per-class probability map plays the role of the one-hot mask
+        else:
+            t_long = targets.squeeze(1).long()
+            t_max = int(t_long.max().item())
+            if t_max >= self.num_classes:
+                raise ValueError(
+                    f"DiceLoss: label value {t_max} is out of range for "
+                    f"num_classes={self.num_classes} (valid: 0–{self.num_classes - 1}). "
+                    f"Unique values in this batch: {t_long.unique().cpu().tolist()}"
+                )
+            t_oh = F.one_hot(t_long, self.num_classes).permute(0, 4, 1, 2, 3).float()
 
         # Reduce over batch + spatial dims at once, keeping the class dim --
         # avoids a Python loop (and per-class kernel launches) over classes.
@@ -83,6 +91,9 @@ class FocalLoss(nn.Module):
             focal_w = (1.0 - p_t) ** self.gamma
             return (focal_w * F.binary_cross_entropy_with_logits(logits, t, reduction="none")).mean()
 
+        if is_soft_target(targets, self.num_classes):
+            return self._soft_forward(logits, targets.float())
+
         t_long = targets.squeeze(1).long()
         t_max = int(t_long.max().item())
         if t_max >= self.num_classes:
@@ -100,6 +111,22 @@ class FocalLoss(nn.Module):
             fg = (t_long != 0).float()
             return (focal_w * ce * fg).sum() / (fg.sum() + 1e-5)
         return (focal_w * ce).mean()
+
+    def _soft_forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Focal loss for soft targets: sum_c alpha_c * t_c * (1 - p_c)^gamma * (-log p_c) per voxel. All classes take part, so the smoothed
+        rim also supervises the background side (with uniform alpha the minimiser is p = t; class weights tilt it towards the up-weighted
+        classes, exactly as for hard labels); with ``ignore_background`` only the voxels that carry foreground mass (target background
+        probability < 0.999, i.e. the structures and their smoothed rim) are averaged.
+        """
+        log_probs = F.log_softmax(logits, dim=1)
+        modulation = (1.0 - log_probs.exp()) ** self.gamma
+        weights = self.alpha.view(1, -1, 1, 1, 1) if self.alpha is not None else 1.0
+        per_voxel = -(weights * targets * modulation * log_probs).sum(dim=1)
+        if self.ignore_background:
+            support = (targets[:, 0] < 0.999).float()
+            return (per_voxel * support).sum() / (support.sum() + 1e-5)
+        return per_voxel.mean()
 
 
 class DiceFocalLoss(nn.Module):
@@ -157,10 +184,11 @@ class DiceCELoss(nn.Module):
         Both component tensors are detached scalars suitable for logging.
         """
         loss_dice = self.dice(logits, targets)
-        loss_ce = (
-            self.ce(logits, targets.float())
-            if self.num_classes == 1
-            else self.ce(logits, targets.squeeze(1).long())
-        )
+        if self.num_classes == 1:
+            loss_ce = self.ce(logits, targets.float())
+        elif is_soft_target(targets, self.num_classes):
+            loss_ce = self.ce(logits, targets.float())  # cross-entropy against the soft class probabilities
+        else:
+            loss_ce = self.ce(logits, targets.squeeze(1).long())
         total = self.dice_weight * loss_dice + self.ce_weight * loss_ce
         return total, {"dice": loss_dice.detach(), "ce": loss_ce.detach()}

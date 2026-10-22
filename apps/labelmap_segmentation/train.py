@@ -50,6 +50,7 @@ from apps.labelmap_segmentation.segmentation_config import (
 from apps.labelmap_segmentation.dataset import (
     create_data_loaders,
     create_labelmap_segmentation_datasets,
+    soft_label_name,
 )
 from apps.labelmap_segmentation.losses import DiceCELoss, DiceFocalLoss, DiceLoss, FocalLoss
 from apps.labelmap_segmentation.metrics import compute_dice, compute_iou
@@ -105,6 +106,21 @@ def parse_args() -> argparse.Namespace:
         "normalization, with all other voxels set to --background_fill_value "
         "(default: None = disabled; may equal --label_name or "
         "--znorm_mask_name to reuse that mask)",
+    )
+    g.add_argument(
+        "--soft_label_sigma",
+        type=float,
+        nargs="+",
+        default=None,
+        metavar="MM",
+        help="Soft labels: sigma in mm of the Gaussian that smooths the one-hot label (one value, or one per axis). The smoothed label is "
+        "the training target, interpolated linearly by the spatial augmentations (default: None = hard labels)",
+    )
+    g.add_argument(
+        "--soft_label_truncate",
+        type=float,
+        default=4.0,
+        help="Soft labels: Gaussian kernel radius in units of sigma (default: 4.0)",
     )
     g.add_argument(
         "--background_fill_value",
@@ -209,6 +225,11 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--scheduler_factor", type=float, default=0.5)
     g.add_argument("--grad_clip", type=float, default=1.0)
     g.add_argument("--amp", action="store_true")
+    g.add_argument(
+        "--gradient_checkpointing",
+        action="store_true",
+        help="Recompute conv3d block activations in the backward pass (slower, much less memory)",
+    )
     g.add_argument("--ema", action="store_true", help="Enable EMA of model weights")
     g.add_argument("--ema_decay", type=float, default=0.999, help="EMA decay factor")
 
@@ -276,6 +297,9 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     dc.znorm_mask_name = args.znorm_mask_name
     dc.foreground_mask_name = args.foreground_mask_name
     dc.background_fill_value = args.background_fill_value
+    if args.soft_label_sigma:
+        dc.soft_label_sigma = args.soft_label_sigma[0] if len(args.soft_label_sigma) == 1 else list(args.soft_label_sigma)
+    dc.soft_label_truncate = args.soft_label_truncate
 
     pc = PatchConfig()
     pc.enabled = args.patch_based
@@ -326,6 +350,7 @@ def setup_manager(args: argparse.Namespace) -> ConfigManager:
     tc.epochs = args.epochs
     tc.batch_size = args.batch_size
     tc.amp = args.amp
+    tc.gradient_checkpointing = args.gradient_checkpointing
     tc.early_stopping = args.early_stopping
     tc.early_stopping_patience = args.early_stopping_patience
     tc.ema = args.ema
@@ -495,6 +520,10 @@ class Trainer:
             decoder_type=self.model_cfg.decoder_type,
         ).to(self.device)
 
+        if self.train_cfg.gradient_checkpointing:
+            self.model.set_checkpointing(True)
+            self.log.info("Gradient checkpointing enabled for the conv3d blocks")
+
         n_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         self.log.info(
             f"UNet3D (encoder: {self.model_cfg.encoder_type}, decoder: {self.model_cfg.decoder_type}) "
@@ -657,7 +686,10 @@ class Trainer:
 
     # ── Batch helpers ─────────────────────────────────────────────────────────
 
-    def _batch_to_tensors(self, batch) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def _batch_to_tensors(
+        self, batch
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """Returns (input, hard label, loss target). The target is the hard label, or the soft label when ``soft_label_sigma`` is set."""
         x = torch.cat([batch[m][tio.DATA] for m in self.data_cfg.modalities], dim=1).to(
             self.device
         )
@@ -666,7 +698,15 @@ class Trainer:
             if self.data_cfg.label_name in batch
             else None
         )
-        return x, y
+        target = y
+        if self.data_cfg.soft_label_sigma:
+            soft = batch[soft_label_name(self.data_cfg.label_name)][tio.DATA].to(self.device)
+            # Augmentation pads with 0 in every channel and blends linearly at the rim: renormalise to a distribution, background where empty
+            soft = soft.clamp_min(0.0)
+            total = soft.sum(dim=1, keepdim=True)
+            target = soft / total.clamp_min(1e-3)
+            target[:, :1] += (total < 1e-3).float()
+        return x, y, target
 
     def _forward(self, x: torch.Tensor, y: torch.Tensor):
         """Returns (logits, loss, components) where components maps sub-loss names to
@@ -739,8 +779,8 @@ class Trainer:
         self.optimizer.zero_grad(set_to_none=True)
 
         for i, batch in enumerate(self.train_loader):
-            x, y = self._batch_to_tensors(batch)
-            logits, loss, components = self._forward(x, y)
+            x, y, target = self._batch_to_tensors(batch)
+            logits, loss, components = self._forward(x, target)
 
             loss_scaled = loss / accum_steps
             if self.scaler is not None:
@@ -825,8 +865,8 @@ class Trainer:
         n = 0
 
         for batch in self.val_loader:
-            x, y = self._batch_to_tensors(batch)
-            logits, loss, _ = self._forward(x, y)
+            x, y, target = self._batch_to_tensors(batch)
+            logits, loss, _ = self._forward(x, target)
             dice = compute_dice(logits, y, self.data_cfg.num_classes)
             iou = compute_iou(logits, y, self.data_cfg.num_classes)
 
@@ -897,7 +937,7 @@ class Trainer:
         self.model.eval()
         try:
             batch = next(iter(self.val_loader))
-            x, y = self._batch_to_tensors(batch)
+            x, y, _ = self._batch_to_tensors(batch)
             with torch.no_grad():
                 logits = self.model(x)
                 n = self.data_cfg.num_classes

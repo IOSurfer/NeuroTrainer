@@ -30,6 +30,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from apps.labelmap_segmentation.blocks import DoubleConv
 from apps.labelmap_segmentation.decoder import build_decoder
 from apps.labelmap_segmentation.encoder import build_encoder
 from apps.labelmap_segmentation.heads import EvalHead, InferHead, TrainHead
@@ -84,6 +85,16 @@ class UNet3D(nn.Module):
                 nn.init.kaiming_normal_(
                     m.weight, mode="fan_out", nonlinearity="leaky_relu"
                 )
+
+    def set_checkpointing(self, enabled: bool = True) -> None:
+        """
+        Activation checkpointing for training: every DoubleConv block (conv3d encoder / decoder) recomputes its
+        activations in the backward pass instead of keeping them, trading ~30% more compute for a large memory cut.
+        Has no effect in eval mode or on the residual / ConvNeXt / EffiDec3D blocks.
+        """
+        for module in self.modules():
+            if isinstance(module, DoubleConv):
+                module.use_checkpoint = enabled
 
     # ── Backbone ───────────────────────────────────────────────────────────────
 

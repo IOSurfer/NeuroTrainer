@@ -37,6 +37,15 @@ class DataConfig(AbstractConfig):
         "May equal znorm_mask_name / foreground_mask_name.",
     )
     normalization = ConfigField("znorm", doc="znorm | rescale | none")
+    soft_label_sigma = ConfigField(
+        None,
+        doc="Soft labels: standard deviation in mm of the Gaussian that smooths the one-hot label (a single value, or one value per "
+        "axis). The smoothed multi-channel label is the training target (the hard label is still used for the Dice / IoU metrics), and it "
+        "is interpolated linearly -- not nearest -- by the spatial augmentations. None or 0 = hard labels.",
+    )
+    soft_label_truncate = ConfigField(
+        4.0, doc="Soft labels: Gaussian kernel radius in units of sigma (the kernel is cut off beyond truncate * sigma)"
+    )
     znorm_mask_name = ConfigField(
         None,
         doc="Optional labelmap folder name; its non-zero voxels define the "
@@ -224,6 +233,11 @@ class TrainingConfig(AbstractConfig):
     early_stopping_patience = ConfigField(30)
     ema = ConfigField(False, doc="Exponential moving average of model weights")
     ema_decay = ConfigField(0.99, doc="EMA decay (closer to 1 = slower shadow update)")
+    gradient_checkpointing = ConfigField(
+        False,
+        doc="Recompute the activations of the conv3d encoder / decoder blocks in the backward pass instead of storing them: "
+        "~30% slower, far less memory (needed to train the full-resolution decoder on 182x218x182 volumes on a 16 GB GPU)",
+    )
 
 
 class InfraConfig(AbstractConfig):
