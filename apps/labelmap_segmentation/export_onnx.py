@@ -16,6 +16,13 @@ Usage
         --head        eval ^
         --output      model_eval.onnx
 
+# Class probabilities (softmax over the class axis, float32 [B, C, D, H, W]) for post-processing:
+    python -m apps.labelmap_segmentation.export_onnx ^
+        --config_dir  output/exp_001 ^
+        --checkpoint  output/exp_001/checkpoints/best.pth ^
+        --head        prob ^
+        --output      model_prob.onnx
+
 # Fixed spatial size (static graph -- faster on TensorRT / CoreML):
     python -m apps.labelmap_segmentation.export_onnx ^
         --config_dir  output/exp_001 ^
@@ -112,6 +119,19 @@ class _EvalWrapper(nn.Module):
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.model.forward_eval(x)
+
+
+class _ProbWrapper(nn.Module):
+    """Class probabilities: softmax over the class axis of the main logits (sigmoid for a single-class model)."""
+
+    def __init__(self, model: UNet3D, num_classes: int) -> None:
+        super().__init__()
+        self.model = model
+        self.num_classes = num_classes
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        logits = self.model(x).float()
+        return torch.sigmoid(logits) if self.num_classes == 1 else torch.softmax(logits, dim=1)
 
 
 # ── Weight helpers ────────────────────────────────────────────────────────────
@@ -276,6 +296,10 @@ def export(
         wrapper = _EvalWrapper(model).to(dev)
         output_names = ["labelmap", "uncertainty"]
         print("[export] EvalHead: outputs labelmap (uint8) + uncertainty (float32)")
+    elif head == "prob":
+        wrapper = _ProbWrapper(model, data_cfg.num_classes).to(dev)
+        output_names = ["probabilities"]
+        print(f"[export] ProbHead: output probabilities (float32, [B, {data_cfg.num_classes}, D, H, W], softmax over axis 1)")
     else:
         wrapper = _InferWrapper(model).to(dev)
         output_names = ["labelmap"]
@@ -291,8 +315,10 @@ def export(
     if not static_shape:
         dynamic_axes = {"input": {0: "batch", 2: "depth", 3: "height", 4: "width"}}
         for oname in output_names:
-            # outputs are [B, D, H, W] -- axes 0-3
-            dynamic_axes[oname] = {0: "batch", 1: "depth", 2: "height", 3: "width"}
+            if head == "prob":  # [B, C, D, H, W]
+                dynamic_axes[oname] = {0: "batch", 2: "depth", 3: "height", 4: "width"}
+            else:  # outputs are [B, D, H, W] -- axes 0-3
+                dynamic_axes[oname] = {0: "batch", 1: "depth", 2: "height", 3: "width"}
 
     # ── Export ─────────────────────────────────────────────────────────────────
     out_path = Path(output)
@@ -343,9 +369,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--head",
         default="infer",
-        choices=["infer", "eval"],
+        choices=["infer", "eval", "prob"],
         help='"infer": argmax labelmap only (fastest, deployment default). '
-        '"eval": labelmap + normalized-entropy uncertainty map.',
+        '"eval": labelmap + normalized-entropy uncertainty map. '
+        '"prob": softmax class probabilities [B, C, D, H, W] for post-processing.',
     )
     p.add_argument("--opset", type=int, default=17, help="ONNX opset version")
     p.add_argument(
